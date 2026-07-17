@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]              # gộp .pyc, .pyo, .pyd trong một dòng
+*.egg-info/
+.pytest_cache/         # cache khi chạy pytest
+
+# ===== Môi trường ảo =====
+venv/
+.venv/
+env/
+
+# ===== Biến môi trường =====
+.env
+!.env.example         # nhưng GIỮ file mẫu để người khác biết cần khai báo gì
+
+# ===== Log & file do app tự sinh =====
+logs/*.log
+!logs/.gitkeep
+
+# ===== File khách upload =====
+uploads/*
+!uploads/.gitkeep
+
+# ===== IDE / hệ điều hành =====
+.vscode/
+.idea/
+Thumbs.db             # Windows tự sinh
+
+# ===== Database local =====
+*.db
+*.sqlite3

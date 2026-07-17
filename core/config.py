@@ -1,5 +1,0 @@
-SECRET_KEY = "your-secret-key"
-ALGORITHM = "HS256"
-
-OTP_EXPIRE_TIME = 300
-JWT_EXPIRE_HOURS = 1
