@@ -1,0 +1,2 @@
+class UserAlreadyActiveError(Exception):
+    pass
