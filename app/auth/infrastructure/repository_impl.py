@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -26,9 +28,23 @@ class SqlAlchemyUserRepository(UserRepository):
         model = self._db.query(UserModel).filter(or_(*conditions)).first()
         return UserMapper.to_entity(model) if model else None
 
+    def get_by_id(self, user_id: UUID) -> User | None:
+        model = self._db.get(UserModel, user_id)
+        return UserMapper.to_entity(model) if model else None
+
     def save(self, user: User) -> User:
         model = UserMapper.to_model(user)
         self._db.add(model)
+        self._db.commit()
+        self._db.refresh(model)
+        return UserMapper.to_entity(model)
+
+    def update(self, user: User) -> User:
+        model = self._db.get(UserModel, user.id)
+        model.phone_number = user.phone_number
+        model.email = user.email
+        model.status = user.status
+        model.role = user.role
         self._db.commit()
         self._db.refresh(model)
         return UserMapper.to_entity(model)

@@ -10,6 +10,7 @@ class UserMapper:
             phone_number=model.phone_number,
             email=model.email,
             status=model.status,
+            role=model.role,
             created_at=model.created_at,
         )
 
@@ -20,5 +21,6 @@ class UserMapper:
             phone_number=entity.phone_number,
             email=entity.email,
             status=entity.status,
+            role=entity.role,
             created_at=entity.created_at,
         )

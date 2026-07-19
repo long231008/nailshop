@@ -13,6 +13,10 @@ Chủ dự án muốn tốc độ, không muốn bị hỏi lại giữa chừng
 
 Chỉ dừng lại hỏi khi thật sự cần quyết định sản phẩm không thể suy ra được (vd: đổi luồng nghiệp vụ, xoá dữ liệu thật trên môi trường không phải local, hoặc hành động gần như không thể đảo ngược và có hậu quả lớn).
 
+## Ngôn ngữ
+
+Trò chuyện với user bằng tiếng Việt. Nhưng mọi text xuất hiện "trên web" — response API, `detail` message của `HTTPException`, validator error message, docstring/label hiển thị ra ngoài, OpenAPI docs — **phải viết bằng tiếng Anh**. Code, tên biến, comment thì viết tiếng Anh như bình thường.
+
 ## Stack & quy ước
 
 - FastAPI + SQLAlchemy 2.0 + Alembic + PostgreSQL (`psycopg`), Redis, `python-jose` (JWT), `bcrypt`.

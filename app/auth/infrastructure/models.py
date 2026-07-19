@@ -5,7 +5,7 @@ from sqlalchemy import DateTime, Enum as SAEnum, String
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.auth.domain.value_object import UserStatus
+from app.auth.domain.value_object import UserRole, UserStatus
 from app.shared.infrastructure.database.base import Base
 
 
@@ -21,6 +21,11 @@ class UserModel(Base):
     status: Mapped[UserStatus] = mapped_column(
         SAEnum(UserStatus, name="user_status", native_enum=False, length=20),
         default=UserStatus.PENDING,
+        nullable=False,
+    )
+    role: Mapped[UserRole] = mapped_column(
+        SAEnum(UserRole, name="user_role", native_enum=False, length=20),
+        default=UserRole.CUSTOMER,
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

@@ -11,3 +11,9 @@ class RedisOtpRepository(OtpRepository):
 
     def save(self, pending_id: UUID, code: str, ttl_seconds: int) -> None:
         self._redis.set(f"otp:register:{pending_id}", code, ex=ttl_seconds)
+
+    def get(self, pending_id: UUID) -> str | None:
+        return self._redis.get(f"otp:register:{pending_id}")
+
+    def delete(self, pending_id: UUID) -> None:
+        self._redis.delete(f"otp:register:{pending_id}")

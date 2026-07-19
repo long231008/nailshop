@@ -7,7 +7,7 @@ from app.auth.domain.entities import User
 from app.auth.domain.exceptions import UserAlreadyActiveError
 from app.auth.domain.repository import OtpRepository, UserRepository
 from app.auth.domain.services import generate_otp_code
-from app.auth.domain.value_object import UserStatus
+from app.auth.domain.value_object import UserRole, UserStatus
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class RegisterUserUseCase:
                     phone_number=input_data.phone_number,
                     email=input_data.email,
                     status=UserStatus.PENDING,
+                    role=UserRole.CUSTOMER,
                     created_at=datetime.now(timezone.utc),
                 )
             )
