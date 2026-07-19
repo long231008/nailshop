@@ -1,5 +1,6 @@
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -9,11 +10,16 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from app.auth.domain.value_object import UserRole
+from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.jwt_provider import JwtTokenProvider
+from app.auth.infrastructure.models import UserModel
+from app.branches.infrastructure.models import LocationModel
 from app.main import app
+from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import SessionLocal
+from app.shifts.infrastructure.models import StaffRosterModel
+from app.staff.infrastructure.models import StaffModel
 
 
 @pytest.fixture
@@ -46,24 +52,122 @@ def unique_email():
     return f"test-{uuid.uuid4().hex[:10]}@example.com"
 
 
-def _auth_headers(role: UserRole) -> dict:
-    token = JwtTokenProvider().create_access_token(user_id=uuid.uuid4(), role=role)
+def _auth_headers(user_id: uuid.UUID, role: UserRole) -> dict:
+    token = JwtTokenProvider().create_access_token(user_id=user_id, role=role)
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.fixture
-def admin_headers():
-    return _auth_headers(UserRole.ADMIN)
+def _create_identity(db_session, cleanup_records, role: UserRole) -> dict:
+    user = UserModel(
+        phone_number=f"09{uuid.uuid4().int % 10**8:08d}",
+        status=UserStatus.ACTIVE,
+        role=role,
+    )
+    db_session.add(user)
+    db_session.commit()
+    cleanup_records.append(("users", user.id))
+    return {"id": user.id, "headers": _auth_headers(user.id, role)}
 
 
 @pytest.fixture
-def staff_headers():
-    return _auth_headers(UserRole.STAFF)
+def admin_identity(db_session, cleanup_records):
+    return _create_identity(db_session, cleanup_records, UserRole.ADMIN)
 
 
 @pytest.fixture
-def customer_headers():
-    return _auth_headers(UserRole.CUSTOMER)
+def admin_headers(admin_identity):
+    return admin_identity["headers"]
+
+
+@pytest.fixture
+def staff_identity(db_session, cleanup_records):
+    return _create_identity(db_session, cleanup_records, UserRole.STAFF)
+
+
+@pytest.fixture
+def staff_headers(staff_identity):
+    return staff_identity["headers"]
+
+
+@pytest.fixture
+def customer_identity(db_session, cleanup_records):
+    return _create_identity(db_session, cleanup_records, UserRole.CUSTOMER)
+
+
+@pytest.fixture
+def customer_headers(customer_identity):
+    return customer_identity["headers"]
+
+
+@pytest.fixture
+def other_customer_headers(db_session, cleanup_records):
+    return _create_identity(db_session, cleanup_records, UserRole.CUSTOMER)["headers"]
+
+
+@pytest.fixture
+def seeded_branch(db_session, cleanup_records):
+    branch = LocationModel(name=f"Branch-{uuid.uuid4().hex[:6]}", address="1 Test St")
+    db_session.add(branch)
+    db_session.commit()
+    cleanup_records.append(("locations", branch.id))
+    return branch.id
+
+
+@pytest.fixture
+def seeded_service(db_session, cleanup_records):
+    service = ServiceModel(
+        branch_id=None,
+        name="Gel Manicure",
+        category="manicure",
+        duration_min=30,
+        base_price=20.0,
+    )
+    db_session.add(service)
+    db_session.commit()
+    cleanup_records.append(("services", service.id))
+    return service.id
+
+
+@pytest.fixture
+def seeded_staff(db_session, cleanup_records, seeded_branch):
+    user = UserModel(
+        phone_number=f"09{uuid.uuid4().int % 10**8:08d}",
+        status=UserStatus.ACTIVE,
+        role=UserRole.STAFF,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    staff = StaffModel(user_id=user.id, branch_id=seeded_branch, display_name="Test Staff")
+    db_session.add(staff)
+    db_session.commit()
+
+    cleanup_records.append(("users", user.id))
+    cleanup_records.append(("staff", staff.id))
+
+    return {
+        "staff_id": staff.id,
+        "user_id": user.id,
+        "branch_id": seeded_branch,
+        "headers": _auth_headers(user.id, UserRole.STAFF),
+    }
+
+
+@pytest.fixture
+def seeded_shift(db_session, cleanup_records, seeded_staff):
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    start = tomorrow.replace(hour=9, minute=0, second=0, microsecond=0)
+    end = tomorrow.replace(hour=17, minute=0, second=0, microsecond=0)
+    shift = StaffRosterModel(
+        staff_id=seeded_staff["staff_id"],
+        branch_id=seeded_staff["branch_id"],
+        start_time=start,
+        end_time=end,
+    )
+    db_session.add(shift)
+    db_session.commit()
+    cleanup_records.append(("staff_rosters", shift.id))
+    return {"start": start, "end": end}
 
 
 @pytest.fixture
