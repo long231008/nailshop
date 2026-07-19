@@ -57,7 +57,7 @@ def register(
 
 
 @router.post(
-    "/verify-otp",
+    "/verify",
     response_model=VerifyOtpResponse,
     status_code=status.HTTP_200_OK,
 )

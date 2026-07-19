@@ -9,7 +9,7 @@ def test_register_with_phone_creates_pending_user_and_otp(
 ):
     cleanup_identifiers["phones"].append(unique_phone)
 
-    response = client.post("/auth/register", json={"phone_number": unique_phone})
+    response = client.post("/app/auth/register", json={"phone_number": unique_phone})
 
     assert response.status_code == 201
     body = response.json()
@@ -35,7 +35,7 @@ def test_register_with_email_creates_pending_user(
 ):
     cleanup_identifiers["emails"].append(unique_email)
 
-    response = client.post("/auth/register", json={"email": unique_email})
+    response = client.post("/app/auth/register", json={"email": unique_email})
 
     assert response.status_code == 201
     pending_id = uuid.UUID(response.json()["pending_id"])
@@ -50,11 +50,11 @@ def test_register_again_while_pending_reuses_row_and_regenerates_otp(
 ):
     cleanup_identifiers["phones"].append(unique_phone)
 
-    first = client.post("/auth/register", json={"phone_number": unique_phone})
+    first = client.post("/app/auth/register", json={"phone_number": unique_phone})
     first_pending_id = first.json()["pending_id"]
     first_otp = fake_redis.get(f"otp:register:{first_pending_id}")
 
-    second = client.post("/auth/register", json={"phone_number": unique_phone})
+    second = client.post("/app/auth/register", json={"phone_number": unique_phone})
     second_pending_id = second.json()["pending_id"]
     second_otp = fake_redis.get(f"otp:register:{second_pending_id}")
 
@@ -71,7 +71,7 @@ def test_register_again_while_pending_reuses_row_and_regenerates_otp(
 
 
 def test_register_without_identifier_returns_422(client):
-    response = client.post("/auth/register", json={})
+    response = client.post("/app/auth/register", json={})
 
     assert response.status_code == 422
 
@@ -90,6 +90,6 @@ def test_register_conflict_when_identifier_already_active(
     )
     db_session.commit()
 
-    response = client.post("/auth/register", json={"phone_number": unique_phone})
+    response = client.post("/app/auth/register", json={"phone_number": unique_phone})
 
     assert response.status_code == 409
