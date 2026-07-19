@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "PowerShell(git *)",
+      "Bash(venv/Scripts/python.exe *)",
+      "Bash(venv\\Scripts\\python.exe *)",
+      "PowerShell(venv/Scripts/python.exe *)",
+      "PowerShell(venv\\Scripts\\python.exe *)",
+      "Bash(venv/Scripts/pip.exe *)",
+      "Bash(venv/Scripts/pytest.exe *)",
+      "Bash(venv/Scripts/alembic.exe *)",
+      "Edit",
+      "Write",
+      "Read",
+      "Glob",
+      "Grep"
+    ]
+  }
+}
