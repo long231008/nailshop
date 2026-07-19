@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from app.auth.domain.value_object import UserRole
+from app.auth.infrastructure.jwt_provider import JwtTokenProvider
 from app.main import app
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import SessionLocal
@@ -44,6 +46,26 @@ def unique_email():
     return f"test-{uuid.uuid4().hex[:10]}@example.com"
 
 
+def _auth_headers(role: UserRole) -> dict:
+    token = JwtTokenProvider().create_access_token(user_id=uuid.uuid4(), role=role)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def admin_headers():
+    return _auth_headers(UserRole.ADMIN)
+
+
+@pytest.fixture
+def staff_headers():
+    return _auth_headers(UserRole.STAFF)
+
+
+@pytest.fixture
+def customer_headers():
+    return _auth_headers(UserRole.CUSTOMER)
+
+
 @pytest.fixture
 def cleanup_identifiers(db_session):
     identifiers = {"phones": [], "emails": []}
@@ -56,3 +78,12 @@ def cleanup_identifiers(db_session):
             {"phones": identifiers["phones"], "emails": identifiers["emails"]},
         )
         db_session.commit()
+
+
+@pytest.fixture
+def cleanup_records(db_session):
+    records: list[tuple[str, object]] = []
+    yield records
+    for table, record_id in reversed(records):
+        db_session.execute(text(f"DELETE FROM {table} WHERE id = :id"), {"id": record_id})
+    db_session.commit()
