@@ -13,7 +13,7 @@ def test_create_custom_design_uploads_file(client, customer_headers, cleanup_rec
     assert response.status_code == 201
     body = response.json()
     assert body["description"] == "Floral pattern"
-    assert body["image_url"].startswith("/uploads/custom_designs/")
+    assert body["image_url"].startswith("https://res.cloudinary.com/")
     assert body["estimated_price"] is None
 
     cleanup_records.append(("custom_designs", body["id"]))

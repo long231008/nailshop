@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-from starlette.staticfiles import StaticFiles
 
 from app.shared.infrastructure.database import models  # noqa: F401 (registers all ORM models)
 
@@ -19,8 +18,6 @@ from app.staff.presentation.routers import router as staff_router
 from app.webhooks.presentation.routers import router as webhooks_router
 
 app = FastAPI(title="Nailshop API")
-
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.include_router(auth_router, prefix="/app")
 app.include_router(branches_router, prefix="/app")

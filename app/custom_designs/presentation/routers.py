@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.domain.value_object import UserRole
 from app.custom_designs.application.price import CustomDesignNotFoundError, set_estimated_price
 from app.custom_designs.infrastructure.models import CustomDesignModel
-from app.custom_designs.infrastructure.storage import LocalFileStorage
+from app.custom_designs.infrastructure.storage import CloudinaryStorage, get_design_storage
 from app.custom_designs.presentation.schemas import (
     CustomDesignPriceRequest,
     CustomDesignResponse,
@@ -15,7 +15,6 @@ from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 
 router = APIRouter(prefix="/custom-designs", tags=["custom-designs"])
-storage = LocalFileStorage()
 
 
 def _to_response(design: CustomDesignModel) -> CustomDesignResponse:
@@ -36,6 +35,7 @@ def create_custom_design(
     description: str | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
+    storage: CloudinaryStorage = Depends(get_design_storage),
 ) -> CustomDesignResponse:
     image_url = storage.save(file)
     design = CustomDesignModel(

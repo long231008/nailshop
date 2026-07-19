@@ -14,6 +14,7 @@ from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.jwt_provider import JwtTokenProvider
 from app.auth.infrastructure.models import UserModel
 from app.branches.infrastructure.models import LocationModel
+from app.custom_designs.infrastructure.storage import get_design_storage
 from app.main import app
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.cache.redis_client import get_redis
@@ -27,9 +28,15 @@ def fake_redis():
     return fakeredis.FakeRedis(decode_responses=True)
 
 
+class FakeDesignStorage:
+    def save(self, file) -> str:
+        return f"https://res.cloudinary.com/test/image/upload/fake-{uuid.uuid4().hex}.png"
+
+
 @pytest.fixture
 def client(fake_redis):
     app.dependency_overrides[get_redis] = lambda: fake_redis
+    app.dependency_overrides[get_design_storage] = lambda: FakeDesignStorage()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

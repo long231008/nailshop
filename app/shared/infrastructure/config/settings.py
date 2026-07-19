@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     PAYMENT_WEBHOOK_SECRET: str = "dev-payment-webhook-secret"
     PAYMENT_CHECKOUT_BASE_URL: str = "https://payments.example.com/checkout"
+    CLOUDINARY_CLOUD_NAME: str
+    CLOUDINARY_API_KEY: str
+    CLOUDINARY_API_SECRET: str
 
     class Config:
         env_file = ".env"

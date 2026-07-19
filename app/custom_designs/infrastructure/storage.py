@@ -1,17 +1,28 @@
-import uuid
-from pathlib import Path
-
+import cloudinary
+import cloudinary.uploader
 from fastapi import UploadFile
 
-UPLOAD_DIR = Path("uploads/custom_designs")
+from app.shared.infrastructure.config.settings import settings
 
 
-class LocalFileStorage:
+class CloudinaryStorage:
+    def __init__(self):
+        cloudinary.config(
+            cloud_name=settings.CLOUDINARY_CLOUD_NAME,
+            api_key=settings.CLOUDINARY_API_KEY,
+            api_secret=settings.CLOUDINARY_API_SECRET,
+            secure=True,
+        )
+
     def save(self, file: UploadFile) -> str:
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        extension = Path(file.filename or "").suffix
-        filename = f"{uuid.uuid4()}{extension}"
-        destination = UPLOAD_DIR / filename
-        with open(destination, "wb") as buffer:
-            buffer.write(file.file.read())
-        return f"/uploads/custom_designs/{filename}"
+        result = cloudinary.uploader.upload(
+            file.file, folder="custom_designs", resource_type="image"
+        )
+        return result["secure_url"]
+
+
+_storage = CloudinaryStorage()
+
+
+def get_design_storage() -> CloudinaryStorage:
+    return _storage
