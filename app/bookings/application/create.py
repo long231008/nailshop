@@ -1,7 +1,8 @@
-from datetime import timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.bookings.application.exceptions import (
@@ -11,12 +12,36 @@ from app.bookings.application.exceptions import (
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.bookings.presentation.schemas import BookingCreateRequest
+from app.discounts.infrastructure.models import DiscountModel, DiscountType
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 
+logger = logging.getLogger(__name__)
+
 DAILY_LIMIT_MINUTES = 120
+GIFT_MESSAGE = "Congratulations! Your order qualifies for a free gift from our shop."
 
 
-def create_booking(db: Session, customer_id: UUID, payload: BookingCreateRequest) -> BookingModel:
+def _find_gift_message(db: Session, branch_id: UUID, total_price: float) -> str | None:
+    now = datetime.now(timezone.utc)
+    gift_rule = (
+        db.query(DiscountModel)
+        .filter(
+            DiscountModel.discount_type == DiscountType.GIFT,
+            DiscountModel.is_active.is_(True),
+            DiscountModel.value < total_price,
+            or_(DiscountModel.branch_id.is_(None), DiscountModel.branch_id == branch_id),
+            or_(DiscountModel.start_at.is_(None), DiscountModel.start_at <= now),
+            or_(DiscountModel.end_at.is_(None), DiscountModel.end_at >= now),
+        )
+        .order_by(DiscountModel.value.desc())
+        .first()
+    )
+    return GIFT_MESSAGE if gift_rule is not None else None
+
+
+def create_booking(
+    db: Session, customer_id: UUID, payload: BookingCreateRequest
+) -> tuple[BookingModel, str | None]:
     booking_date = payload.items[0].start_time.date()
 
     prepared_items = []
@@ -102,4 +127,14 @@ def create_booking(db: Session, customer_id: UUID, payload: BookingCreateRequest
 
     db.commit()
     db.refresh(booking)
-    return booking
+
+    gift_message = _find_gift_message(db, payload.branch_id, total_price)
+    if gift_message is not None:
+        logger.info(
+            "Customer %s qualifies for a shop gift (booking %s total %.2f)",
+            customer_id,
+            booking.id,
+            total_price,
+        )
+
+    return booking, gift_message

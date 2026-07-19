@@ -38,6 +38,7 @@ class BookingResponse(BaseModel):
     final_price: float | None
     deposit_amount: float | None
     details: list[BookingDetailResponse] = []
+    gift_message: str | None = None
 
 
 class BookingApproveResponse(BaseModel):

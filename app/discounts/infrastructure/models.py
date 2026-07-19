@@ -12,6 +12,7 @@ from app.shared.infrastructure.database.base import Base
 class DiscountType(str, Enum):
     PERCENTAGE = "percentage"
     FIXED_AMOUNT = "fixed_amount"
+    GIFT = "gift"
 
 
 class DiscountModel(Base):
@@ -25,6 +26,7 @@ class DiscountModel(Base):
         SAEnum(DiscountType, name="discount_type", native_enum=False, length=20),
         nullable=False,
     )
+    # discount/fixed_amount off; for GIFT, the booking-total threshold that triggers the reward
     value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     branch_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("locations.id"), nullable=True

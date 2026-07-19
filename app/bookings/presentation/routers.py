@@ -52,7 +52,9 @@ def _to_detail_response(detail: BookingDetailModel) -> BookingDetailResponse:
     )
 
 
-def _to_booking_response(db: Session, booking: BookingModel) -> BookingResponse:
+def _to_booking_response(
+    db: Session, booking: BookingModel, gift_message: str | None = None
+) -> BookingResponse:
     details = (
         db.query(BookingDetailModel).filter(BookingDetailModel.booking_id == booking.id).all()
     )
@@ -68,6 +70,7 @@ def _to_booking_response(db: Session, booking: BookingModel) -> BookingResponse:
             float(booking.deposit_amount) if booking.deposit_amount is not None else None
         ),
         details=[_to_detail_response(d) for d in details],
+        gift_message=gift_message,
     )
 
 
@@ -78,7 +81,7 @@ def create_booking_endpoint(
     current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
 ) -> BookingResponse:
     try:
-        booking = create_booking(db, current_user.id, payload)
+        booking, gift_message = create_booking(db, current_user.id, payload)
     except InvalidBookingItemsError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except StaffConflictError:
@@ -92,7 +95,7 @@ def create_booking_endpoint(
             detail="Total booked duration for this day cannot exceed 2 hours",
         )
 
-    return _to_booking_response(db, booking)
+    return _to_booking_response(db, booking, gift_message)
 
 
 @router.post("/{booking_id}/approve", response_model=BookingApproveResponse)
