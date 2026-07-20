@@ -15,7 +15,18 @@ class BookingStatusCountsResponse(BaseModel):
 class DashboardSummaryResponse(BaseModel):
     date: date
     bookings_today: BookingStatusCountsResponse
-    revenue_today: float
     queue_waiting_count: int
     pending_custom_designs: int
     active_staff_count: int
+
+
+class RevenueBreakdownResponse(BaseModel):
+    today: float
+    this_week: float
+    this_month: float
+    this_year: float
+
+
+class RevenueSummaryResponse(BaseModel):
+    deposit_revenue: RevenueBreakdownResponse
+    total_revenue: RevenueBreakdownResponse

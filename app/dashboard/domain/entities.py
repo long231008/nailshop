@@ -16,7 +16,20 @@ class BookingStatusCounts:
 class DashboardSummary:
     date: date
     bookings_today: BookingStatusCounts
-    revenue_today: float
     queue_waiting_count: int
     pending_custom_designs: int
     active_staff_count: int
+
+
+@dataclass
+class RevenueBreakdown:
+    today: float
+    this_week: float
+    this_month: float
+    this_year: float
+
+
+@dataclass
+class RevenueSummary:
+    deposit_revenue: RevenueBreakdown
+    total_revenue: RevenueBreakdown
