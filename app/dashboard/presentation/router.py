@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
 from app.dashboard.application.get_summary import get_dashboard_summary
+from app.dashboard.infrastructure.repository_impl import SqlAlchemyDashboardRepository
 from app.dashboard.presentation.schemas import (
     BookingStatusCountsResponse,
     DashboardSummaryResponse,
@@ -23,7 +24,7 @@ def dashboard_summary(
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> DashboardSummaryResponse:
     today = datetime.now(timezone.utc).date()
-    summary = get_dashboard_summary(db, branch_id, today)
+    summary = get_dashboard_summary(SqlAlchemyDashboardRepository(db), branch_id, today)
 
     return DashboardSummaryResponse(
         date=summary.date,
