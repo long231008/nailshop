@@ -4,6 +4,15 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class StaffResponse(BaseModel):
+    id: UUID
+    user_id: UUID
+    branch_id: UUID
+    display_name: str
+    status: str
+    created_at: datetime
+
+
 class StaffShift(BaseModel):
     id: UUID
     start_time: datetime

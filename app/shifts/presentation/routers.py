@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
@@ -8,6 +11,38 @@ from app.shared.presentation.dependencies import require_roles
 from app.shifts.presentation.schemas import ShiftCreateRequest, ShiftResponse
 
 router = APIRouter(prefix="/shifts", tags=["shifts"])
+
+
+@router.get("", response_model=list[ShiftResponse])
+def list_shifts(
+    staff_id: UUID | None = None,
+    branch_id: UUID | None = None,
+    from_: datetime | None = Query(default=None, alias="from"),
+    to: datetime | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> list[ShiftResponse]:
+    query = db.query(StaffRosterModel)
+    if staff_id is not None:
+        query = query.filter(StaffRosterModel.staff_id == staff_id)
+    if branch_id is not None:
+        query = query.filter(StaffRosterModel.branch_id == branch_id)
+    if from_ is not None:
+        query = query.filter(StaffRosterModel.end_time >= from_)
+    if to is not None:
+        query = query.filter(StaffRosterModel.start_time <= to)
+
+    shifts = query.order_by(StaffRosterModel.start_time).offset(offset).limit(limit).all()
+
+    return [
+        ShiftResponse(
+            id=s.id, staff_id=s.staff_id, branch_id=s.branch_id,
+            start_time=s.start_time, end_time=s.end_time,
+        )
+        for s in shifts
+    ]
 
 
 @router.post("", response_model=ShiftResponse, status_code=status.HTTP_201_CREATED)

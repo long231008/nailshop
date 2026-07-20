@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
@@ -45,6 +45,28 @@ def create_custom_design(
     db.commit()
     db.refresh(design)
     return _to_response(design)
+
+
+@router.get("", response_model=list[CustomDesignResponse])
+def list_custom_designs(
+    priced: bool | None = None,
+    customer_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> list[CustomDesignResponse]:
+    query = db.query(CustomDesignModel)
+    if priced is True:
+        query = query.filter(CustomDesignModel.estimated_price.isnot(None))
+    elif priced is False:
+        query = query.filter(CustomDesignModel.estimated_price.is_(None))
+    if customer_id is not None:
+        query = query.filter(CustomDesignModel.customer_id == customer_id)
+
+    designs = query.order_by(CustomDesignModel.created_at.desc()).offset(offset).limit(limit).all()
+
+    return [_to_response(d) for d in designs]
 
 
 @router.post("/{design_id}/price", response_model=CustomDesignResponse)

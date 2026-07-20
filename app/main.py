@@ -13,6 +13,7 @@ from app.bookings.application.expire_soft_locks import expire_unpaid_soft_locks
 from app.bookings.presentation.routers import router as bookings_router
 from app.branches.presentation.router import router as branches_router
 from app.custom_designs.presentation.routers import router as custom_designs_router
+from app.dashboard.presentation.router import router as dashboard_router
 from app.discounts.presentation.routers import router as discounts_router
 from app.me.presentation.routers import router as me_router
 from app.queue.presentation.routers import router as queue_router
@@ -65,3 +66,4 @@ app.include_router(queue_router, prefix="/app")
 app.include_router(webhooks_router, prefix="/app")
 app.include_router(admin_router, prefix="/app")
 app.include_router(audit_log_router, prefix="/app")
+app.include_router(dashboard_router, prefix="/app")

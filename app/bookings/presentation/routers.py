@@ -1,6 +1,7 @@
+from datetime import date as date_type
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from redis import Redis
 from sqlalchemy.orm import Session
 
@@ -20,13 +21,14 @@ from app.bookings.application.exceptions import (
 )
 from app.bookings.application.final_price import set_final_price
 from app.bookings.application.no_show import mark_no_show
-from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
+from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.bookings.presentation.schemas import (
     BillResponse,
     BookingActionRequest,
     BookingApproveResponse,
     BookingCreateRequest,
     BookingDetailResponse,
+    BookingListItem,
     BookingResponse,
     BookingStatusResponse,
     FinalPriceRequest,
@@ -96,6 +98,45 @@ def create_booking_endpoint(
         )
 
     return _to_booking_response(db, booking, gift_message)
+
+
+@router.get("", response_model=list[BookingListItem])
+def list_bookings(
+    status_filter: BookingStatus | None = Query(default=None, alias="status"),
+    branch_id: UUID | None = None,
+    customer_id: UUID | None = None,
+    date_from: date_type | None = None,
+    date_to: date_type | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> list[BookingListItem]:
+    query = db.query(BookingModel)
+    if status_filter is not None:
+        query = query.filter(BookingModel.status == status_filter)
+    if branch_id is not None:
+        query = query.filter(BookingModel.branch_id == branch_id)
+    if customer_id is not None:
+        query = query.filter(BookingModel.customer_id == customer_id)
+    if date_from is not None:
+        query = query.filter(BookingModel.booking_date >= date_from)
+    if date_to is not None:
+        query = query.filter(BookingModel.booking_date <= date_to)
+
+    bookings = query.order_by(BookingModel.created_at.desc()).offset(offset).limit(limit).all()
+
+    return [
+        BookingListItem(
+            id=b.id,
+            customer_id=b.customer_id,
+            branch_id=b.branch_id,
+            booking_date=b.booking_date,
+            status=b.status.value,
+            total_price=float(b.total_price) if b.total_price is not None else None,
+        )
+        for b in bookings
+    ]
 
 
 @router.post("/{booking_id}/approve", response_model=BookingApproveResponse)

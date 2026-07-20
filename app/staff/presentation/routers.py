@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
@@ -10,9 +10,10 @@ from app.staff.application.start_service import (
     StaffBusyError,
     start_service,
 )
-from app.staff.infrastructure.models import StaffModel
+from app.staff.infrastructure.models import StaffModel, StaffStatus
 from app.staff.presentation.schemas import (
     StaffAppointment,
+    StaffResponse,
     StaffScheduleResponse,
     StaffShift,
     StartServiceRequest,
@@ -21,6 +22,36 @@ from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 
 router = APIRouter(prefix="/staff", tags=["staff"])
+
+
+@router.get("", response_model=list[StaffResponse])
+def list_staff(
+    branch_id: UUID | None = None,
+    status_filter: StaffStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> list[StaffResponse]:
+    query = db.query(StaffModel)
+    if branch_id is not None:
+        query = query.filter(StaffModel.branch_id == branch_id)
+    if status_filter is not None:
+        query = query.filter(StaffModel.status == status_filter)
+
+    staff_list = query.order_by(StaffModel.created_at).offset(offset).limit(limit).all()
+
+    return [
+        StaffResponse(
+            id=s.id,
+            user_id=s.user_id,
+            branch_id=s.branch_id,
+            display_name=s.display_name,
+            status=s.status.value,
+            created_at=s.created_at,
+        )
+        for s in staff_list
+    ]
 
 
 def _authorize_staff_access(db: Session, staff_id: UUID, current_user: CurrentUser) -> StaffModel:

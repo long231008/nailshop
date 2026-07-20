@@ -41,6 +41,15 @@ class BookingResponse(BaseModel):
     gift_message: str | None = None
 
 
+class BookingListItem(BaseModel):
+    id: UUID
+    customer_id: UUID
+    branch_id: UUID
+    booking_date: date
+    status: str
+    total_price: float | None
+
+
 class BookingApproveResponse(BaseModel):
     id: UUID
     status: str
