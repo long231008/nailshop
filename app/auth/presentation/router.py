@@ -1,8 +1,15 @@
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from redis import Redis
 from sqlalchemy.orm import Session
 
 from app.auth.application.dto import RegisterUserInput, VerifyOtpInput
+from app.auth.application.google_login import (
+    GoogleEmailNotVerifiedError,
+    login_or_register_with_google,
+)
 from app.auth.application.register_user import RegisterUserUseCase
 from app.auth.application.verify_otp import VerifyOtpUseCase
 from app.auth.domain.exceptions import (
@@ -10,6 +17,13 @@ from app.auth.domain.exceptions import (
     OtpInvalidError,
     UserAlreadyActiveError,
     UserNotFoundError,
+)
+from app.auth.infrastructure.google_oauth import (
+    GoogleTokenExchangeError,
+    InvalidGoogleTokenError,
+    build_authorization_url,
+    exchange_code_for_id_token,
+    verify_id_token,
 )
 from app.auth.infrastructure.jwt_provider import JwtTokenProvider
 from app.auth.infrastructure.otp_repository_impl import RedisOtpRepository
@@ -24,6 +38,8 @@ from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+GOOGLE_STATE_TTL_SECONDS = 5 * 60
 
 
 @router.post(
@@ -90,6 +106,58 @@ def verify_otp(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid OTP code",
+        )
+
+    return VerifyOtpResponse(
+        access_token=result.access_token,
+        token_type=result.token_type,
+        user_id=result.user_id,
+        role=result.role.value,
+    )
+
+
+@router.get("/google/login")
+def google_login(redis_client: Redis = Depends(get_redis)) -> RedirectResponse:
+    state = secrets.token_urlsafe(24)
+    redis_client.set(f"oauth:google:state:{state}", "1", ex=GOOGLE_STATE_TTL_SECONDS)
+    return RedirectResponse(build_authorization_url(state))
+
+
+@router.get("/google/callback", response_model=VerifyOtpResponse)
+def google_callback(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+) -> VerifyOtpResponse:
+    state_key = f"oauth:google:state:{state}"
+    if redis_client.get(state_key) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OAuth state",
+        )
+    redis_client.delete(state_key)
+
+    try:
+        id_token_str = exchange_code_for_id_token(code)
+        claims = verify_id_token(id_token_str)
+    except (GoogleTokenExchangeError, InvalidGoogleTokenError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google authentication failed",
+        )
+
+    try:
+        result = login_or_register_with_google(
+            user_repository=SqlAlchemyUserRepository(db),
+            token_provider=JwtTokenProvider(),
+            email=claims.get("email"),
+            email_verified=claims.get("email_verified", False),
+        )
+    except GoogleEmailNotVerifiedError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google account has no verified email",
         )
 
     return VerifyOtpResponse(
