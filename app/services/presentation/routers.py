@@ -10,6 +10,7 @@ from app.services.presentation.schemas import (
     ServiceLengthCreateRequest,
     ServiceLengthResponse,
     ServiceResponse,
+    ServiceUpdateRequest,
 )
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import get_db
@@ -68,6 +69,33 @@ def list_services(
         )
         for service in query.all()
     ]
+
+
+@router.patch("/{service_id}", response_model=ServiceResponse)
+def update_service(
+    service_id: UUID,
+    payload: ServiceUpdateRequest,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> ServiceResponse:
+    service = db.get(ServiceModel, service_id)
+    if service is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(service, field, value)
+
+    db.commit()
+    db.refresh(service)
+
+    return ServiceResponse(
+        id=service.id,
+        branch_id=service.branch_id,
+        name=service.name,
+        category=service.category,
+        duration_min=service.duration_min,
+        base_price=float(service.base_price),
+    )
 
 
 @router.post(

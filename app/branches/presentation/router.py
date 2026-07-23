@@ -1,6 +1,8 @@
 from collections import defaultdict
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
@@ -8,6 +10,7 @@ from app.branches.presentation.schemas import (
     BranchCreateRequest,
     BranchResponse,
     BranchServiceSummary,
+    BranchUpdateRequest,
 )
 from app.branches.infrastructure.models import LocationModel
 from app.services.infrastructure.models import ServiceModel
@@ -69,3 +72,41 @@ def list_branches(db: Session = Depends(get_db)) -> list[BranchResponse]:
         )
         for branch in branches
     ]
+
+
+@router.patch("/{branch_id}", response_model=BranchResponse)
+def update_branch(
+    branch_id: UUID,
+    payload: BranchUpdateRequest,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> BranchResponse:
+    branch = db.get(LocationModel, branch_id)
+    if branch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(branch, field, value)
+
+    db.commit()
+    db.refresh(branch)
+
+    services = (
+        db.query(ServiceModel)
+        .filter(or_(ServiceModel.branch_id == branch.id, ServiceModel.branch_id.is_(None)))
+        .all()
+    )
+
+    return BranchResponse(
+        id=branch.id,
+        name=branch.name,
+        address=branch.address,
+        phone_number=branch.phone_number,
+        services=[
+            BranchServiceSummary(
+                id=s.id, name=s.name, category=s.category,
+                duration_min=s.duration_min, base_price=float(s.base_price),
+            )
+            for s in services
+        ],
+    )
