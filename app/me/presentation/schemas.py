@@ -10,3 +10,11 @@ class MyBookingSummary(BaseModel):
     booking_date: date
     status: str
     total_price: float | None
+
+
+class MyCustomDesignSummary(BaseModel):
+    id: UUID
+    image_url: str
+    description: str | None
+    estimated_price: float | None
+    status: str
