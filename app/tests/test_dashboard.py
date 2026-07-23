@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import datetime, timezone
 
 from app.bookings.infrastructure.models import BookingModel, BookingStatus
 from app.webhooks.infrastructure.models import (
@@ -13,7 +13,7 @@ def _create_booking(db_session, cleanup_records, customer_id, branch_id):
     booking = BookingModel(
         customer_id=customer_id,
         branch_id=branch_id,
-        booking_date=date.today(),
+        booking_date=datetime.now(timezone.utc).date(),
         status=BookingStatus.COMPLETED,
         total_price=30.0,
         final_price=33.0,

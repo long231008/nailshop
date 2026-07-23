@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import datetime, timezone
 
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.bookings.application.expire_soft_locks import expire_unpaid_soft_locks
@@ -15,7 +15,7 @@ def _create_booking(db_session, cleanup_records, customer_id, branch_id, status)
     booking = BookingModel(
         customer_id=customer_id,
         branch_id=branch_id,
-        booking_date=date.today(),
+        booking_date=datetime.now(timezone.utc).date(),
         status=status,
         total_price=20.0,
         deposit_amount=6.0,
