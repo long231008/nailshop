@@ -19,6 +19,7 @@ class BranchServiceSummary(BaseModel):
     id: UUID
     name: str
     category: str
+    description: str | None
     duration_min: int
     base_price: float
 

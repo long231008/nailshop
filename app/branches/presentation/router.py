@@ -54,6 +54,7 @@ def list_branches(db: Session = Depends(get_db)) -> list[BranchResponse]:
             id=service.id,
             name=service.name,
             category=service.category,
+            description=service.description,
             duration_min=service.duration_min,
             base_price=float(service.base_price),
         )
@@ -107,6 +108,7 @@ def update_branch(
                 id=s.id,
                 name=s.name,
                 category=s.category,
+                description=s.description,
                 duration_min=s.duration_min,
                 base_price=float(s.base_price),
             )

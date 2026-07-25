@@ -22,6 +22,7 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
+from app.shared.infrastructure.database import models  # noqa: F401 (registers all ORM models)
 from app.shared.infrastructure.database.base import Base
 
 target_metadata = Base.metadata

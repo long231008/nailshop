@@ -7,6 +7,7 @@ class ServiceCreateRequest(BaseModel):
     branch_id: UUID | None = None
     name: str
     category: str
+    description: str | None = None
     duration_min: int
     base_price: float
 
@@ -15,6 +16,7 @@ class ServiceUpdateRequest(BaseModel):
     branch_id: UUID | None = None
     name: str | None = None
     category: str | None = None
+    description: str | None = None
     duration_min: int | None = None
     base_price: float | None = None
 
@@ -24,6 +26,7 @@ class ServiceResponse(BaseModel):
     branch_id: UUID | None
     name: str
     category: str
+    description: str | None
     duration_min: int
     base_price: float
 

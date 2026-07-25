@@ -19,6 +19,7 @@ class ServiceModel(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     duration_min: Mapped[int] = mapped_column(Integer, nullable=False)
     base_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -29,6 +29,7 @@ def create_service(
         branch_id=payload.branch_id,
         name=payload.name,
         category=payload.category,
+        description=payload.description,
         duration_min=payload.duration_min,
         base_price=payload.base_price,
     )
@@ -41,6 +42,7 @@ def create_service(
         branch_id=service.branch_id,
         name=service.name,
         category=service.category,
+        description=service.description,
         duration_min=service.duration_min,
         base_price=float(service.base_price),
     )
@@ -64,6 +66,7 @@ def list_services(
             branch_id=service.branch_id,
             name=service.name,
             category=service.category,
+            description=service.description,
             duration_min=service.duration_min,
             base_price=float(service.base_price),
         )
@@ -93,6 +96,7 @@ def update_service(
         branch_id=service.branch_id,
         name=service.name,
         category=service.category,
+        description=service.description,
         duration_min=service.duration_min,
         base_price=float(service.base_price),
     )
