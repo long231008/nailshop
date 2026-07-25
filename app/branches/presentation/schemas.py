@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class BranchCreateRequest(BaseModel):
     name: str
-    address: str
+    address: str | None = None
     phone_number: str | None = None
 
 
@@ -27,6 +27,6 @@ class BranchServiceSummary(BaseModel):
 class BranchResponse(BaseModel):
     id: UUID
     name: str
-    address: str
+    address: str | None
     phone_number: str | None
     services: list[BranchServiceSummary] = []
