@@ -261,6 +261,18 @@ def _get_or_create_customer(db, phone: str) -> UserModel:
     return customer
 
 
+ADMIN_PHONE = "07000000000"
+
+
+def _get_or_create_admin(db) -> UserModel:
+    admin = db.query(UserModel).filter_by(phone_number=ADMIN_PHONE).first()
+    if admin is None:
+        admin = UserModel(phone_number=ADMIN_PHONE, status=UserStatus.ACTIVE, role=UserRole.ADMIN)
+        db.add(admin)
+        db.flush()
+    return admin
+
+
 def _create_booking(db, customer, service, staff, branch_id, start_time, status):
     duration = service.duration_min
     price = float(service.base_price)
@@ -360,6 +372,7 @@ def seed() -> None:
         _get_or_create_customer(db, "07911111111"),
         _get_or_create_customer(db, "07922222222"),
     ]
+    _get_or_create_admin(db)
 
     db.add(
         CustomDesignModel(
@@ -398,6 +411,7 @@ def seed() -> None:
         )
     print(f"Customers: {len(customers)}")
     print("Custom designs: 2 (1 priced, 1 pending)")
+    print(f"Admin login phone: {ADMIN_PHONE} (use /app/auth/login then /verify with the OTP)")
 
 
 if __name__ == "__main__":
