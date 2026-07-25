@@ -26,6 +26,13 @@ class DiscountCreateRequest(BaseModel):
         return self
 
 
+class DiscountUpdateRequest(BaseModel):
+    name: str | None = None
+    is_active: bool | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+
+
 class DiscountResponse(BaseModel):
     id: UUID
     name: str

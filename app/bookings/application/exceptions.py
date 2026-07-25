@@ -20,3 +20,7 @@ class StaffConflictError(Exception):
 
 class InvalidBookingStateError(Exception):
     pass
+
+
+class NotBookingOwnerError(Exception):
+    pass

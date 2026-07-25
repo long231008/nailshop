@@ -1,7 +1,18 @@
+import hmac
+
 from app.auth.application.dto import VerifyOtpInput, VerifyOtpOutput
-from app.auth.domain.exceptions import OtpExpiredError, OtpInvalidError, UserNotFoundError
+from app.auth.domain.exceptions import (
+    OtpExpiredError,
+    OtpInvalidError,
+    OtpTooManyAttemptsError,
+    UserBlockedError,
+    UserNotFoundError,
+)
 from app.auth.domain.repository import OtpRepository, TokenProvider, UserRepository
 from app.auth.domain.value_object import UserStatus
+
+MAX_OTP_ATTEMPTS = 5
+ATTEMPT_WINDOW_SECONDS = 5 * 60
 
 
 class VerifyOtpUseCase:
@@ -19,12 +30,21 @@ class VerifyOtpUseCase:
         user = self._user_repository.get_by_id(input_data.pending_id)
         if user is None:
             raise UserNotFoundError()
+        if user.status == UserStatus.BLOCKED:
+            raise UserBlockedError()
 
         stored_code = self._otp_repository.get(input_data.pending_id)
         if stored_code is None:
             raise OtpExpiredError()
 
-        if stored_code != input_data.otp_code:
+        if not hmac.compare_digest(stored_code, input_data.otp_code):
+            attempts = self._otp_repository.register_failed_attempt(
+                input_data.pending_id, ATTEMPT_WINDOW_SECONDS
+            )
+            if attempts >= MAX_OTP_ATTEMPTS:
+                # Burn the code so an attacker cannot keep guessing this one.
+                self._otp_repository.delete(input_data.pending_id)
+                raise OtpTooManyAttemptsError()
             raise OtpInvalidError()
 
         self._otp_repository.delete(input_data.pending_id)

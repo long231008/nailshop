@@ -9,6 +9,7 @@ from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
 from app.shifts.infrastructure.models import StaffRosterModel
 from app.shifts.presentation.schemas import ShiftCreateRequest, ShiftResponse
+from app.staff.infrastructure.models import StaffModel
 
 router = APIRouter(prefix="/shifts", tags=["shifts"])
 
@@ -54,6 +55,15 @@ def create_shift(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> ShiftResponse:
+    staff = db.get(StaffModel, payload.staff_id)
+    if staff is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff not found")
+    if staff.branch_id != payload.branch_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This staff member does not work at the given branch",
+        )
+
     conflict = (
         db.query(StaffRosterModel)
         .filter(
@@ -86,3 +96,17 @@ def create_shift(
         start_time=shift.start_time,
         end_time=shift.end_time,
     )
+
+
+@router.delete("/{shift_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_shift(
+    shift_id: UUID,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> None:
+    shift = db.get(StaffRosterModel, shift_id)
+    if shift is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shift not found")
+
+    db.delete(shift)
+    db.commit()

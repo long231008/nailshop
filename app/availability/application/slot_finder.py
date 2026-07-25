@@ -1,16 +1,19 @@
 from datetime import date as date_type
-from datetime import datetime, time, timedelta, timezone
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
+from app.shared.infrastructure.clock import day_bounds_utc, now_utc
 from app.shifts.infrastructure.models import StaffRosterModel
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
 BUFFER_MINUTES = 15
 SLOT_STEP_MINUTES = 15
+# Nobody can book a slot that starts in the next few minutes anyway.
+MIN_LEAD_MINUTES = 15
 
 
 class ServiceNotFoundError(Exception):
@@ -42,8 +45,9 @@ def find_available_slots(
         staff_query = staff_query.filter(StaffModel.id == staff_id)
     staff_list = staff_query.all()
 
-    day_start = datetime.combine(target_date, time.min, tzinfo=timezone.utc)
-    day_end = day_start + timedelta(days=1)
+    day_start, day_end = day_bounds_utc(target_date)
+    # Past slots are never offered: today's window starts at "now + lead time".
+    earliest_start = max(day_start, now_utc() + timedelta(minutes=MIN_LEAD_MINUTES))
 
     slots = []
     for staff in staff_list:
@@ -73,8 +77,10 @@ def find_available_slots(
         )
 
         for shift in shifts:
-            window_start = max(shift.start_time, day_start)
+            window_start = max(shift.start_time, earliest_start)
             window_end = min(shift.end_time, day_end)
+            if window_start >= window_end:
+                continue
             cursor = window_start
             free_windows = []
 

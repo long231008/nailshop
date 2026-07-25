@@ -75,6 +75,37 @@ def list_branches(db: Session = Depends(get_db)) -> list[BranchResponse]:
     ]
 
 
+@router.get("/{branch_id}", response_model=BranchResponse)
+def get_branch(branch_id: UUID, db: Session = Depends(get_db)) -> BranchResponse:
+    branch = db.get(LocationModel, branch_id)
+    if branch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+
+    services = (
+        db.query(ServiceModel)
+        .filter(or_(ServiceModel.branch_id == branch.id, ServiceModel.branch_id.is_(None)))
+        .all()
+    )
+
+    return BranchResponse(
+        id=branch.id,
+        name=branch.name,
+        address=branch.address,
+        phone_number=branch.phone_number,
+        services=[
+            BranchServiceSummary(
+                id=s.id,
+                name=s.name,
+                category=s.category,
+                description=s.description,
+                duration_min=s.duration_min,
+                base_price=float(s.base_price),
+            )
+            for s in services
+        ],
+    )
+
+
 @router.patch("/{branch_id}", response_model=BranchResponse)
 def update_branch(
     branch_id: UUID,

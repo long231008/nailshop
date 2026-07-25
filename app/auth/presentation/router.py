@@ -10,13 +10,14 @@ from app.auth.application.google_login import (
     GoogleEmailNotVerifiedError,
     login_or_register_with_google,
 )
-from app.auth.application.login_user import LoginUseCase
-from app.auth.application.register_user import RegisterUserUseCase
+from app.auth.application.request_otp import RequestOtpUseCase
 from app.auth.application.verify_otp import VerifyOtpUseCase
 from app.auth.domain.exceptions import (
     OtpExpiredError,
     OtpInvalidError,
-    UserAlreadyActiveError,
+    OtpResendTooSoonError,
+    OtpTooManyAttemptsError,
+    UserBlockedError,
     UserNotFoundError,
 )
 from app.auth.infrastructure.google_oauth import (
@@ -33,9 +34,12 @@ from app.auth.presentation.schemas import (
     LoginRequest,
     RegisterRequest,
     RegisterResponse,
+    RequestOtpRequest,
     VerifyOtpRequest,
     VerifyOtpResponse,
 )
+from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.senders import get_notification_sender
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.config.settings import settings
 from app.shared.infrastructure.database.session import get_db
@@ -46,10 +50,58 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 GOOGLE_STATE_TTL_SECONDS = 5 * 60
 
 
+def _request_otp(
+    payload: RequestOtpRequest | RegisterRequest | LoginRequest,
+    db: Session,
+    redis_client: Redis,
+    notification_sender: NotificationSender,
+) -> RegisterResponse:
+    use_case = RequestOtpUseCase(
+        user_repository=SqlAlchemyUserRepository(db),
+        otp_repository=RedisOtpRepository(redis_client),
+        notification_sender=notification_sender,
+    )
+
+    try:
+        result = use_case.execute(
+            RegisterUserInput(phone_number=payload.phone_number, email=payload.email)
+        )
+    except OtpResendTooSoonError:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="A code was sent recently. Please wait before requesting another one.",
+        )
+
+    return RegisterResponse(
+        pending_id=result.pending_id, expires_in_seconds=result.expires_in_seconds
+    )
+
+
+@router.post(
+    "/request-otp",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_200_OK,
+)
+@limiter.limit("5/minute")
+def request_otp(
+    request: Request,
+    payload: RequestOtpRequest,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
+) -> RegisterResponse:
+    """Send a one-time code, creating the account on first use.
+
+    The response is identical whether or not the identifier is already registered.
+    """
+    return _request_otp(payload, db, redis_client, notification_sender)
+
+
 @router.post(
     "/register",
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
+    deprecated=True,
 )
 @limiter.limit("5/minute")
 def register(
@@ -57,31 +109,17 @@ def register(
     payload: RegisterRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> RegisterResponse:
-    use_case = RegisterUserUseCase(
-        user_repository=SqlAlchemyUserRepository(db),
-        otp_repository=RedisOtpRepository(redis_client),
-    )
-
-    try:
-        result = use_case.execute(
-            RegisterUserInput(phone_number=payload.phone_number, email=payload.email)
-        )
-    except UserAlreadyActiveError:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="An account with this identifier is already active",
-        )
-
-    return RegisterResponse(
-        pending_id=result.pending_id, expires_in_seconds=result.expires_in_seconds
-    )
+    """Deprecated alias of /auth/request-otp."""
+    return _request_otp(payload, db, redis_client, notification_sender)
 
 
 @router.post(
     "/login",
     response_model=RegisterResponse,
     status_code=status.HTTP_200_OK,
+    deprecated=True,
 )
 @limiter.limit("5/minute")
 def login(
@@ -89,25 +127,10 @@ def login(
     payload: LoginRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> RegisterResponse:
-    use_case = LoginUseCase(
-        user_repository=SqlAlchemyUserRepository(db),
-        otp_repository=RedisOtpRepository(redis_client),
-    )
-
-    try:
-        result = use_case.execute(
-            RegisterUserInput(phone_number=payload.phone_number, email=payload.email)
-        )
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this identifier",
-        )
-
-    return RegisterResponse(
-        pending_id=result.pending_id, expires_in_seconds=result.expires_in_seconds
-    )
+    """Deprecated alias of /auth/request-otp."""
+    return _request_otp(payload, db, redis_client, notification_sender)
 
 
 @router.post(
@@ -137,10 +160,20 @@ def verify_otp(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pending registration not found",
         )
+    except UserBlockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been blocked. Please contact the salon.",
+        )
     except OtpExpiredError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OTP has expired or does not exist. Please request a new one.",
+        )
+    except OtpTooManyAttemptsError:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many incorrect attempts. Please request a new code.",
         )
     except OtpInvalidError:
         raise HTTPException(
@@ -198,6 +231,11 @@ def google_callback(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Google account has no verified email",
+        )
+    except UserBlockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been blocked. Please contact the salon.",
         )
 
     return RedirectResponse(

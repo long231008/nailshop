@@ -2,7 +2,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.bookings.application.exceptions import BookingDetailNotFoundError, BookingNotFoundError
+from app.bookings.application.exceptions import (
+    BookingDetailNotFoundError,
+    BookingNotFoundError,
+    InvalidBookingStateError,
+)
 from app.bookings.infrastructure.models import (
     BookingDetailModel,
     BookingDetailStatus,
@@ -10,11 +14,15 @@ from app.bookings.infrastructure.models import (
     BookingStatus,
 )
 
+COMPLETABLE_STATUSES = (BookingStatus.APPROVED, BookingStatus.IN_PROGRESS)
+
 
 def complete_booking_detail(db: Session, booking_id: UUID, booking_detail_id: UUID) -> BookingModel:
     booking = db.get(BookingModel, booking_id)
     if booking is None:
         raise BookingNotFoundError()
+    if booking.status not in COMPLETABLE_STATUSES:
+        raise InvalidBookingStateError("Only approved or in-progress bookings can be completed")
 
     detail = db.get(BookingDetailModel, booking_detail_id)
     if detail is None or detail.booking_id != booking_id:

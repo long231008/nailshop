@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 
 class MyProfileResponse(BaseModel):
@@ -14,8 +14,8 @@ class MyProfileResponse(BaseModel):
 
 
 class MyProfileUpdateRequest(BaseModel):
-    phone_number: str | None = None
-    email: str | None = None
+    phone_number: str | None = Field(default=None, pattern=r"^\+?[0-9]{6,15}$")
+    email: EmailStr | None = None
 
 
 class MyBookingSummary(BaseModel):
@@ -24,6 +24,9 @@ class MyBookingSummary(BaseModel):
     booking_date: date
     status: str
     total_price: float | None
+    deposit_amount: float | None = None
+    # Present while an approved booking is waiting for its deposit.
+    deposit_link: str | None = None
 
 
 class MyCustomDesignSummary(BaseModel):

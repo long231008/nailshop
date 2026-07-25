@@ -86,13 +86,15 @@ def test_create_booking_rejects_over_daily_limit(
 ):
     # seeded_service duration is 30 min; 4 bookings x 30min = 120min (at the limit),
     # a 5th booking should push the customer's daily total over 120 minutes.
+    # Slots are spaced 45 min apart to respect the 15-minute buffer between
+    # appointments for the same staff member.
     for i in range(4):
         payload = {
             "branch_id": str(seeded_branch),
             "items": [
                 {
                     "service_id": str(seeded_service),
-                    "start_time": _start_time(seeded_shift, offset_minutes=i * 30),
+                    "start_time": _start_time(seeded_shift, offset_minutes=i * 45),
                 }
             ],
         }
@@ -106,7 +108,7 @@ def test_create_booking_rejects_over_daily_limit(
         "items": [
             {
                 "service_id": str(seeded_service),
-                "start_time": _start_time(seeded_shift, offset_minutes=4 * 30),
+                "start_time": _start_time(seeded_shift, offset_minutes=4 * 45),
             }
         ],
     }

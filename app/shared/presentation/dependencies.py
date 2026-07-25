@@ -4,11 +4,20 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from app.auth.domain.value_object import UserRole
+from app.auth.domain.value_object import UserRole, UserStatus
+from app.auth.infrastructure.models import UserModel
 from app.shared.infrastructure.config.settings import settings
+from app.shared.infrastructure.database.session import get_db
 
 security = HTTPBearer()
+
+_UNAUTHORIZED = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Invalid or expired token",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
 
 class CurrentUser(BaseModel):
@@ -18,6 +27,7 @@ class CurrentUser(BaseModel):
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
 ) -> CurrentUser:
     try:
         payload = jwt.decode(
@@ -26,16 +36,20 @@ def get_current_user(
             algorithms=[settings.JWT_ALGORITHM],
         )
         user_id = payload.get("user_id")
-        role = payload.get("role")
-        if user_id is None or role is None:
+        if user_id is None:
             raise ValueError("missing claims")
-        return CurrentUser(id=UUID(user_id), role=UserRole(role))
+        user_id = UUID(user_id)
     except (JWTError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise _UNAUTHORIZED
+
+    # The token says who you were when it was issued; the database says who you are
+    # now. Blocking an account or changing its role has to take effect immediately,
+    # so the role is always read back from the database rather than from the claims.
+    user = db.get(UserModel, user_id)
+    if user is None or user.status != UserStatus.ACTIVE:
+        raise _UNAUTHORIZED
+
+    return CurrentUser(id=user.id, role=user.role)
 
 
 def require_roles(*roles: UserRole):

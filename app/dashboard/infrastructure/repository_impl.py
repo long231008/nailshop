@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import func
@@ -14,6 +14,12 @@ from app.dashboard.domain.entities import (
 )
 from app.dashboard.domain.repository import DashboardRepository
 from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
+from app.shared.infrastructure.clock import (
+    start_of_day_utc,
+    start_of_month_utc,
+    start_of_week_utc,
+    start_of_year_utc,
+)
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 from app.webhooks.infrastructure.models import (
     PaymentTransactionModel,
@@ -43,6 +49,9 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
             queue_query = queue_query.filter(QueueTicketModel.branch_id == branch_id)
         queue_waiting_count = queue_query.count()
 
+        # Custom designs are not tied to a branch, so this figure is global. When a
+        # branch filter is active it is still shown - a request waiting to be priced
+        # concerns every branch.
         pending_custom_designs = (
             self._db.query(CustomDesignModel)
             .filter(CustomDesignModel.estimated_price.is_(None))
@@ -70,10 +79,10 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
         )
 
     def get_revenue_summary(self, branch_id: UUID | None, now: datetime) -> RevenueSummary:
-        today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-        week_start = today_start - timedelta(days=today_start.weekday())
-        month_start = today_start.replace(day=1)
-        year_start = today_start.replace(month=1, day=1)
+        today_start = start_of_day_utc(now)
+        week_start = start_of_week_utc(now)
+        month_start = start_of_month_utc(now)
+        year_start = start_of_year_utc(now)
 
         deposit_types = [PaymentTransactionType.DEPOSIT]
         total_types = [PaymentTransactionType.DEPOSIT, PaymentTransactionType.FINAL_PAYMENT]

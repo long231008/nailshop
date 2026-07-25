@@ -44,9 +44,21 @@ def test_login_then_verify_returns_token_with_existing_role(
     assert body["role"] == "admin"
 
 
-def test_login_with_unknown_identifier_returns_404(client, unique_phone):
+def test_login_with_unknown_identifier_gets_same_response_as_known(
+    client, unique_phone, cleanup_identifiers, db_session
+):
+    # Anti-enumeration: an unknown number silently becomes a pending registration,
+    # so the response never reveals whether an account exists.
+    cleanup_identifiers["phones"].append(unique_phone)
+
     response = client.post("/app/auth/login", json={"phone_number": unique_phone})
-    assert response.status_code == 404
+
+    assert response.status_code == 200
+    assert "pending_id" in response.json()
+
+    user = db_session.query(UserModel).filter(UserModel.phone_number == unique_phone).first()
+    assert user is not None
+    assert user.status == UserStatus.PENDING
 
 
 def test_login_works_for_pending_user_too(

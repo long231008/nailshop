@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
 from app.auth.infrastructure.models import UserModel
-from app.me.application.bookings import list_my_bookings
+from app.me.application.bookings import bookings_awaiting_deposit, list_my_bookings
 from app.me.application.custom_designs import list_my_custom_designs
 from app.me.presentation.schemas import (
     MyBookingSummary,
@@ -12,6 +12,7 @@ from app.me.presentation.schemas import (
     MyProfileResponse,
     MyProfileUpdateRequest,
 )
+from app.shared.infrastructure.config.settings import settings
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, get_current_user, require_roles
 
@@ -76,6 +77,7 @@ def get_my_bookings(
     current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
 ) -> list[MyBookingSummary]:
     bookings = list_my_bookings(db, current_user.id)
+    awaiting_deposit = bookings_awaiting_deposit(db, bookings)
     return [
         MyBookingSummary(
             id=b.id,
@@ -83,6 +85,12 @@ def get_my_bookings(
             booking_date=b.booking_date,
             status=b.status.value,
             total_price=float(b.total_price) if b.total_price is not None else None,
+            deposit_amount=(float(b.deposit_amount) if b.deposit_amount is not None else None),
+            deposit_link=(
+                f"{settings.PAYMENT_CHECKOUT_BASE_URL}/{b.id}?amount={b.deposit_amount}"
+                if b.id in awaiting_deposit
+                else None
+            ),
         )
         for b in bookings
     ]

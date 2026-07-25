@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.audit_log.infrastructure.models import AuditLogModel
-from app.bookings.application.exceptions import BookingNotFoundError
+from app.bookings.application.exceptions import BookingNotFoundError, InvalidBookingStateError
 from app.bookings.infrastructure.models import (
     BookingDetailModel,
     BookingDetailStatus,
@@ -11,11 +11,21 @@ from app.bookings.infrastructure.models import (
     BookingStatus,
 )
 
+MANUALLY_COMPLETABLE_STATUSES = (
+    BookingStatus.PENDING,
+    BookingStatus.APPROVED,
+    BookingStatus.IN_PROGRESS,
+)
+
 
 def complete_booking_manually(db: Session, booking_id: UUID, actor_user_id: UUID) -> BookingModel:
     booking = db.get(BookingModel, booking_id)
     if booking is None:
         raise BookingNotFoundError()
+    if booking.status not in MANUALLY_COMPLETABLE_STATUSES:
+        raise InvalidBookingStateError(
+            "Cancelled, no-show or already completed bookings cannot be completed"
+        )
 
     db.query(BookingDetailModel).filter(BookingDetailModel.booking_id == booking_id).update(
         {"status": BookingDetailStatus.COMPLETED}

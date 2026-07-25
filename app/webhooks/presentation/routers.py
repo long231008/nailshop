@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import get_db
 from app.webhooks.application.payment import (
+    AmountMismatchError,
     BookingNotFoundError,
     InvalidSignatureError,
     process_payment_webhook,
@@ -40,17 +41,27 @@ async def payment_webhook(
         )
 
     try:
-        transaction, is_new = process_payment_webhook(
-            db, payload.transaction_id, payload.booking_id, payload.amount, transaction_type
+        transaction, counts_as_paid = process_payment_webhook(
+            db,
+            payload.transaction_id,
+            payload.booking_id,
+            payload.amount,
+            transaction_type,
+            succeeded=payload.status == "success",
         )
     except BookingNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except AmountMismatchError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payment amount does not match the amount due",
+        )
 
-    if is_new and transaction_type == PaymentTransactionType.DEPOSIT:
+    if counts_as_paid and transaction_type == PaymentTransactionType.DEPOSIT:
         redis_client.delete(f"booking:soft_lock:{payload.booking_id}")
 
     return {
         "status": "ok",
         "transaction_id": transaction.provider_transaction_id,
-        "processed": is_new,
+        "processed": counts_as_paid,
     }

@@ -1,11 +1,15 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
 from app.discounts.infrastructure.models import DiscountModel, DiscountType
-from app.discounts.presentation.schemas import DiscountCreateRequest, DiscountResponse
+from app.discounts.presentation.schemas import (
+    DiscountCreateRequest,
+    DiscountResponse,
+    DiscountUpdateRequest,
+)
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
 
@@ -69,3 +73,23 @@ def list_discounts(
     discounts = query.order_by(DiscountModel.created_at.desc()).offset(offset).limit(limit).all()
 
     return [_to_response(d) for d in discounts]
+
+
+@router.patch("/{discount_id}", response_model=DiscountResponse)
+def update_discount(
+    discount_id: UUID,
+    payload: DiscountUpdateRequest,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> DiscountResponse:
+    discount = db.get(DiscountModel, discount_id)
+    if discount is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Discount not found")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(discount, field, value)
+
+    db.commit()
+    db.refresh(discount)
+
+    return _to_response(discount)

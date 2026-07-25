@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -14,6 +13,7 @@ from app.dashboard.presentation.schemas import (
     RevenueBreakdownResponse,
     RevenueSummaryResponse,
 )
+from app.shared.infrastructure.clock import now_utc, today_in_shop_tz
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
 
@@ -26,7 +26,7 @@ def dashboard_summary(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> DashboardSummaryResponse:
-    today = datetime.now(timezone.utc).date()
+    today = today_in_shop_tz()
     summary = get_dashboard_summary(SqlAlchemyDashboardRepository(db), branch_id, today)
 
     return DashboardSummaryResponse(
@@ -51,7 +51,7 @@ def dashboard_revenue(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> RevenueSummaryResponse:
-    now = datetime.now(timezone.utc)
+    now = now_utc()
     summary = get_revenue_summary(SqlAlchemyDashboardRepository(db), branch_id, now)
 
     return RevenueSummaryResponse(

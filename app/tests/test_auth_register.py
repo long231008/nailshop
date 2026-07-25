@@ -54,6 +54,11 @@ def test_register_again_while_pending_reuses_row_and_regenerates_otp(
     first_pending_id = first.json()["pending_id"]
     first_otp = fake_redis.get(f"otp:register:{first_pending_id}")
 
+    # A resend inside the cooldown window is refused outright.
+    blocked = client.post("/app/auth/register", json={"phone_number": unique_phone})
+    assert blocked.status_code == 429
+
+    fake_redis.delete(f"otp:cooldown:{first_pending_id}")
     second = client.post("/app/auth/register", json={"phone_number": unique_phone})
     second_pending_id = second.json()["pending_id"]
     second_otp = fake_redis.get(f"otp:register:{second_pending_id}")
@@ -72,20 +77,19 @@ def test_register_without_identifier_returns_422(client):
     assert response.status_code == 422
 
 
-def test_register_conflict_when_identifier_already_active(
-    client, unique_phone, cleanup_identifiers, db_session
+def test_register_with_active_identifier_behaves_like_login(
+    client, fake_redis, unique_phone, cleanup_identifiers, db_session
 ):
+    # Anti-enumeration: registering an already-active number is indistinguishable
+    # from a fresh registration - the code is simply sent to the account owner.
     cleanup_identifiers["phones"].append(unique_phone)
 
-    db_session.add(
-        UserModel(
-            id=uuid.uuid4(),
-            phone_number=unique_phone,
-            status=UserStatus.ACTIVE,
-        )
-    )
+    user = UserModel(id=uuid.uuid4(), phone_number=unique_phone, status=UserStatus.ACTIVE)
+    db_session.add(user)
     db_session.commit()
 
     response = client.post("/app/auth/register", json={"phone_number": unique_phone})
 
-    assert response.status_code == 409
+    assert response.status_code == 201
+    assert response.json()["pending_id"] == str(user.id)
+    assert fake_redis.get(f"otp:register:{user.id}") is not None

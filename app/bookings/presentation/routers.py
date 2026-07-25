@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth.domain.value_object import UserRole
 from app.bookings.application.approve import SOFT_LOCK_TTL_SECONDS, approve_booking
 from app.bookings.application.bill import get_bill
+from app.bookings.application.cancel import cancel_booking
 from app.bookings.application.complete import complete_booking_detail
 from app.bookings.application.complete_manual import complete_booking_manually
 from app.bookings.application.create import create_booking
@@ -17,6 +18,7 @@ from app.bookings.application.exceptions import (
     DailyBookingLimitExceededError,
     InvalidBookingItemsError,
     InvalidBookingStateError,
+    NotBookingOwnerError,
     StaffConflictError,
 )
 from app.bookings.application.final_price import set_final_price
@@ -33,6 +35,8 @@ from app.bookings.presentation.schemas import (
     BookingStatusResponse,
     FinalPriceRequest,
 )
+from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.senders import get_notification_sender
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
@@ -142,10 +146,13 @@ def approve_booking_endpoint(
     booking_id: UUID,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
-    _=Depends(require_roles(UserRole.ADMIN)),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> BookingApproveResponse:
     try:
-        booking, deposit_link = approve_booking(db, redis_client, booking_id)
+        booking, deposit_link = approve_booking(
+            db, redis_client, booking_id, current_user.id, notification_sender
+        )
     except BookingNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     except InvalidBookingStateError as exc:
@@ -185,6 +192,26 @@ def get_booking_status(
     )
 
 
+@router.post("/{booking_id}/cancel", response_model=BookingResponse)
+def cancel_booking_endpoint(
+    booking_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
+) -> BookingResponse:
+    try:
+        booking = cancel_booking(db, booking_id, current_user.id)
+    except BookingNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except NotBookingOwnerError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this booking"
+        )
+    except InvalidBookingStateError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    return _to_booking_response(db, booking)
+
+
 @router.post("/{booking_id}/complete", response_model=BookingResponse)
 def complete_booking_endpoint(
     booking_id: UUID,
@@ -200,6 +227,8 @@ def complete_booking_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Booking detail not found"
         )
+    except InvalidBookingStateError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     return _to_booking_response(db, booking)
 
@@ -214,6 +243,8 @@ def no_show_endpoint(
         booking = mark_no_show(db, booking_id, current_user.id)
     except BookingNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except InvalidBookingStateError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     return _to_booking_response(db, booking)
 
@@ -228,6 +259,8 @@ def complete_manual_endpoint(
         booking = complete_booking_manually(db, booking_id, current_user.id)
     except BookingNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except InvalidBookingStateError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     return _to_booking_response(db, booking)
 

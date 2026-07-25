@@ -19,6 +19,7 @@ from app.custom_designs.presentation.routers import router as custom_designs_rou
 from app.dashboard.presentation.router import router as dashboard_router
 from app.discounts.presentation.routers import router as discounts_router
 from app.me.presentation.routers import router as me_router
+from app.notification.infrastructure.senders import get_notification_sender
 from app.queue.presentation.routers import router as queue_router
 from app.services.presentation.routers import router as services_router
 from app.shared.infrastructure.cache.redis_client import redis_client
@@ -37,14 +38,22 @@ from app.webhooks.presentation.routers import router as webhooks_router
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
 SOFT_LOCK_CHECK_INTERVAL_SECONDS = 60
+# Slightly shorter than the interval so a crashed holder frees the lock by itself.
+SOFT_LOCK_JOB_LOCK_TTL_SECONDS = 55
 
 scheduler = BackgroundScheduler()
 
 
 def _run_expire_soft_locks_job() -> None:
+    # Several replicas each run a scheduler; the Redis lock lets one of them do the
+    # sweep per tick instead of all of them at once.
+    if not redis_client.set(
+        "jobs:expire_soft_locks:lock", "1", nx=True, ex=SOFT_LOCK_JOB_LOCK_TTL_SECONDS
+    ):
+        return
     db = SessionLocal()
     try:
-        expire_unpaid_soft_locks(db, redis_client)
+        expire_unpaid_soft_locks(db, redis_client, get_notification_sender())
     finally:
         db.close()
 

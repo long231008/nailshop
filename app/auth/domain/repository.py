@@ -36,6 +36,19 @@ class OtpRepository(ABC):
     def delete(self, pending_id: UUID) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def register_failed_attempt(self, pending_id: UUID, ttl_seconds: int) -> int:
+        """Count one wrong guess and return how many have been made for this code."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def start_resend_cooldown(self, pending_id: UUID, ttl_seconds: int) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def is_resend_blocked(self, pending_id: UUID) -> bool:
+        raise NotImplementedError
+
 
 class TokenProvider(ABC):
     @abstractmethod

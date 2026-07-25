@@ -18,6 +18,15 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
     CORS_ALLOWED_ORIGINS: str = "*"
     ALLOWED_HOSTS: str = "*"
+    # Business timezone. Opening hours, "today" and daily counters are computed in this
+    # zone, not UTC, so a UK summer day still starts at 00:00 local time.
+    SHOP_TIMEZONE: str = "Europe/London"
+    # "console" prints OTP codes and deposit links to the log (local development only).
+    # "null" records that a message was sent without ever logging its contents.
+    NOTIFICATION_BACKEND: str = "null"
+    # Only trust X-Forwarded-For for rate limiting when running behind a proxy you control.
+    TRUST_PROXY_HEADERS: bool = False
+    SQL_ECHO: bool = False
 
     class Config:
         env_file = ".env"

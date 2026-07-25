@@ -196,6 +196,27 @@ def cleanup_identifiers(db_session):
 def cleanup_records(db_session):
     records: list[tuple[str, object]] = []
     yield records
+
+    all_ids = [str(record_id) for _, record_id in records]
+    user_ids = [str(record_id) for table, record_id in records if table == "users"]
+    location_ids = [str(record_id) for table, record_id in records if table == "locations"]
+    if all_ids:
+        # Audit rows are written as a side effect of the actions under test; drop
+        # any that reference records we are about to delete.
+        db_session.execute(
+            text(
+                "DELETE FROM audit_logs "
+                "WHERE actor_user_id = ANY(CAST(:user_ids AS uuid[])) "
+                "OR entity_id = ANY(CAST(:all_ids AS uuid[]))"
+            ),
+            {"user_ids": user_ids, "all_ids": all_ids},
+        )
+    if location_ids:
+        db_session.execute(
+            text("DELETE FROM queue_tickets WHERE branch_id = ANY(CAST(:ids AS uuid[]))"),
+            {"ids": location_ids},
+        )
+
     for table, record_id in reversed(records):
         db_session.execute(text(f"DELETE FROM {table} WHERE id = :id"), {"id": record_id})
     db_session.commit()

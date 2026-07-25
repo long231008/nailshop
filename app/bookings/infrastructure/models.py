@@ -47,6 +47,9 @@ class BookingModel(Base):
     total_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     final_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     deposit_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # When the booking was approved; the deposit window is measured from here.
+    # Kept in the database so a Redis wipe cannot silently cancel paid-for slots.
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

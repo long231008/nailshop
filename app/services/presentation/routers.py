@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.branches.infrastructure.models import LocationModel
 from app.services.application.lengths import ServiceNotFoundError, add_service_length
 from app.services.infrastructure.models import ServiceModel
 from app.services.presentation.schemas import (
@@ -25,6 +26,9 @@ def create_service(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> ServiceResponse:
+    if payload.branch_id is not None and db.get(LocationModel, payload.branch_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+
     service = ServiceModel(
         branch_id=payload.branch_id,
         name=payload.name,

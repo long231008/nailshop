@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.auth.domain.entities import User
+from app.auth.domain.exceptions import UserBlockedError
 from app.auth.domain.repository import TokenProvider, UserRepository
 from app.auth.domain.value_object import UserRole, UserStatus
 
@@ -41,6 +42,8 @@ def login_or_register_with_google(
                 created_at=datetime.now(timezone.utc),
             )
         )
+    elif user.status == UserStatus.BLOCKED:
+        raise UserBlockedError()
     elif user.status != UserStatus.ACTIVE:
         user.status = UserStatus.ACTIVE
         user = user_repository.update(user)
