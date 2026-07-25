@@ -4,6 +4,9 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.admin.presentation.routers import router as admin_router
 from app.audit_log.presentation.routers import router as audit_log_router
@@ -22,6 +25,7 @@ from app.shared.infrastructure.cache.redis_client import redis_client
 from app.shared.infrastructure.config.settings import settings
 from app.shared.infrastructure.database import models  # noqa: F401 (registers all ORM models)
 from app.shared.infrastructure.database.session import SessionLocal
+from app.shared.infrastructure.rate_limit import limiter, rate_limit_exceeded_handler
 from app.shared.presentation.middleware import (
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
@@ -60,6 +64,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Nailshop API", lifespan=lifespan)
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -68,6 +76,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(auth_router, prefix="/app")

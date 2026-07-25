@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_SECRET: str
     GOOGLE_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/google/callback"
     CORS_ALLOWED_ORIGINS: str = "*"
+    ALLOWED_HOSTS: str = "*"
 
     class Config:
         env_file = ".env"
@@ -25,6 +26,12 @@ class Settings(BaseSettings):
         if self.CORS_ALLOWED_ORIGINS == "*":
             return ["*"]
         return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",")]
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        if self.ALLOWED_HOSTS == "*":
+            return ["*"]
+        return [host.strip() for host in self.ALLOWED_HOSTS.split(",")]
 
 
 settings = Settings()

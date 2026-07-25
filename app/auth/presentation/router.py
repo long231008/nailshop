@@ -1,6 +1,6 @@
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from redis import Redis
 from sqlalchemy.orm import Session
@@ -36,6 +36,7 @@ from app.auth.presentation.schemas import (
 )
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import get_db
+from app.shared.infrastructure.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -47,7 +48,9 @@ GOOGLE_STATE_TTL_SECONDS = 5 * 60
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit("5/minute")
 def register(
+    request: Request,
     payload: RegisterRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -77,7 +80,9 @@ def register(
     response_model=VerifyOtpResponse,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit("10/minute")
 def verify_otp(
+    request: Request,
     payload: VerifyOtpRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),

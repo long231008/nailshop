@@ -19,8 +19,11 @@ from app.main import app
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.database.session import SessionLocal
+from app.shared.infrastructure.rate_limit import limiter
 from app.shifts.infrastructure.models import StaffRosterModel
 from app.staff.infrastructure.models import StaffModel
+
+limiter.enabled = False
 
 
 @pytest.fixture
