@@ -1,8 +1,8 @@
-"""Populate the local database with example data for manual testing.
+"""Populate the local database with the real branch/service catalog.
 
 Run with: venv/Scripts/python.exe scripts/seed_data.py
 
-Static data (branch/services/staff/shifts/discount) is safe to re-run -
+Static data (branches/services/staff/shifts) is safe to re-run -
 existing rows are reused instead of duplicated. Dynamic data (customers,
 bookings, payments, queue tickets, custom designs) is always added fresh
 so re-running gives you more sample activity to look at.
@@ -27,9 +27,8 @@ from app.bookings.infrastructure.models import (
 )
 from app.branches.infrastructure.models import LocationModel
 from app.custom_designs.infrastructure.models import CustomDesignModel
-from app.discounts.infrastructure.models import DiscountModel, DiscountType
 from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
-from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
+from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import SessionLocal
 from app.shifts.infrastructure.models import StaffRosterModel
 from app.staff.infrastructure.models import StaffModel
@@ -40,69 +39,183 @@ from app.webhooks.infrastructure.models import (
 )
 
 SHIFT_DAYS_AHEAD = 7
-BRANCH_NAME = "Chi nhánh Quận 1"
 DEPOSIT_PERCENTAGE = 0.3
 
+# name, category, description, duration_min, base_price
+MJ_NAILS_SERVICES = [
+    ("Normal Polish", "polish", None, 15, 13),
+    ("Normal Polish Manicure", "polish", None, 30, 21),
+    ("Mini Normal Polish Pedicure", "polish", None, 30, 18),
+    ("Full Normal Polish Pedicure", "polish", None, 45, 32),
+    ("Manicure with No Colour", "polish", None, 25, 17),
+    ("Full Pedicure with No Colour", "polish", None, 40, 30),
+    ("Gel", "gel", "+£1 for existing gel removal", 30, 26),
+    ("Gel Manicure", "gel", "Free removal of existing gel", 45, 32),
+    ("Mini Gel Pedicure", "gel", "+£1 for existing gel removal", 35, 26),
+    ("Full Gel Pedicure", "gel", "Free removal of existing gel", 50, 40),
+    ("Acrylics with Normal Polish - Full Set", "full_set", None, 75, 35),
+    ("Acrylics with Gel - Full Set", "full_set", None, 90, 40),
+    ("Pink and White (Powder French Tips) - Full Set", "full_set", None, 100, 43),
+    ("Ombre - Full Set", "full_set", None, 100, 42),
+    ("Coloured Acrylic - Full Set", "full_set", None, 90, 42),
+    ("Single Nail", "full_set", "From £5", 15, 5),
+    ("Acrylic Infill with No Colour", "infill", None, 60, 25),
+    ("Acrylics with Normal Polish - Infill", "infill", None, 60, 25),
+    ("Acrylics with Gel - Infill", "infill", None, 75, 30),
+    ("Pink and White (Powder French Tips) - Infill", "infill", None, 80, 35),
+    ("Ombre Infills", "infill", None, 80, 35),
+    ("Acrylic Removal", "removal", None, 20, 13),
+    ("Gel Removal", "removal", None, 15, 8),
+    ("Acrylic Removal and New Set of Acrylics with Normal Polish", "removal", None, 90, 38),
+    ("Acrylic Removal and New Set of Acrylics with Gel", "removal", None, 105, 43),
+    ("Acrylic Removal and New Set of Ombre", "removal", None, 110, 43),
+    ("Acrylic Removal and Normal Polish", "removal", "+£10 with Manicure", 40, 20),
+    ("Acrylic Removal and Gel", "removal", None, 50, 30),
+    ("Gel Removal and Normal Polish", "removal", "+£10 with Manicure", 35, 16),
+    (
+        "Acrylic Removal and New Set of Pink and White (Powder French Tips)",
+        "removal",
+        None,
+        110,
+        45,
+    ),
+    ("BIAB Removal and New Set of BIAB", "removal", None, 90, 39),
+    ("Overlay on Natural Nails (BIAB)", "biab", None, 60, 34),
+    ("BIAB with Nail Extension Tips", "biab", None, 90, 40),
+    ("BIAB Ombre Full Set", "biab", None, 100, 45),
+    ("BIAB Ombre Infill", "biab", None, 80, 38),
+    ("BIAB Infill (with BIAB Colour)", "biab", None, 60, 30),
+    ("BIAB Infill (with Gel Colour)", "biab", None, 60, 31),
+    ("French BIAB", "biab", "From £5", 20, 5),
+    ("Nail Art", "addon", "From £3 - ask staff for exact price before your service", 10, 3),
+    ("Gemstones", "addon", "From £3 - ask staff for exact price before your service", 10, 3),
+    (
+        "French Tips or Coloured Tips",
+        "addon",
+        "From £5 - ask staff for exact price before your service",
+        15,
+        5,
+    ),
+    ("Chrome Effect", "addon", "Add-on, +£6", 10, 6),
+    ("Cat Eye Effect", "addon", "Add-on, +£6", 10, 6),
+    ("Long Nails", "addon", "Add-on, +£5", 10, 5),
+]
+
+# Same catalog as MJ Nails, with a handful of branch-specific prices and one
+# extra infill line - matches the real "Major Nails" price list flyer.
+_MAJOR_NAILS_OVERRIDES = {
+    "Full Gel Pedicure": 39,
+    "Acrylics with Gel - Full Set": 38,
+    "Pink and White (Powder French Tips) - Full Set": 42,
+    "Ombre - Full Set": 40,
+    "Coloured Acrylic - Full Set": 39,
+    "Acrylic Removal and New Set of Acrylics with Gel": 42,
+    "Acrylic Removal and New Set of Ombre": 42,
+    "BIAB Removal and New Set of BIAB": 37,
+}
+MAJOR_NAILS_SERVICES = [
+    (name, category, description, duration_min, _MAJOR_NAILS_OVERRIDES.get(name, base_price))
+    for name, category, description, duration_min, base_price in MJ_NAILS_SERVICES
+] + [
+    ("Change Gel Colour on Acrylics", "infill", None, 30, 30),
+]
+
+XINH_STUDIO_SERVICES = [
+    (
+        "Hydro Head Massage - 45 min",
+        "hydro_head_massage",
+        "Hair & Scalp Consultation, Scalp Oil Treatment, Neck & Shoulder Massage, "
+        "Head Massage, Shampoo & Conditioning, Halo Waterfall Experience, Blow-Dry Finish",
+        45,
+        45,
+    ),
+    (
+        "Hydro Head Massage - 60 min",
+        "hydro_head_massage",
+        "Hair & Scalp Consultation, Scalp Oil Treatment, Neck & Shoulder Massage, "
+        "Head Massage, Facial Cleanse & Mask, Herbal Scalp Rinse, Hair Conditioning, "
+        "Halo Waterfall Experience, Blow-Dry Finish",
+        60,
+        60,
+    ),
+    (
+        "Hydro Head Massage - 90 min",
+        "hydro_head_massage",
+        "Hair & Scalp Consultation, Scalp Oil Treatment, Neck & Shoulder Massage, "
+        "Scalp Combing & Stimulation, Head Massage, Facial Cleanse, Mask & Gua Sha, "
+        "Shampoo, Hair Mask, Herbal Scalp Rinse, Hair Conditioning, "
+        "Halo Waterfall Experience, Hand Massage, Blow-Dry Finish",
+        90,
+        85,
+    ),
+]
+
+BRANCHES = [
+    {
+        "name": "Major Nails",
+        "address": None,
+        "phone_number": None,
+        "services": MAJOR_NAILS_SERVICES,
+        "staff_names": ["Amy", "Kate"],
+    },
+    {
+        "name": "MJ Nails",
+        "address": None,
+        "phone_number": None,
+        "services": MJ_NAILS_SERVICES,
+        "staff_names": ["Jess", "Lily"],
+    },
+    {
+        "name": "XINH STUDIO",
+        "address": "Unit 3, The Precinct, Boverton Road, Llantwit Major, CF61 1XA",
+        "phone_number": "01446621342",
+        "services": XINH_STUDIO_SERVICES,
+        "staff_names": ["Linh"],
+    },
+]
+
 # (days_ago relative to now, booking status, payment: None | "deposit" | "deposit+final")
-# Spread across today / this week / this month / this year / last year so the
-# dashboard's day-week-month-year revenue buckets each show something different.
+# Spread across today / this week / this month / this year so the dashboard's
+# day-week-month-year revenue buckets each show something for every branch.
 BOOKING_SCENARIOS = [
     (0, BookingStatus.COMPLETED, "deposit+final"),
-    (2, BookingStatus.COMPLETED, "deposit+final"),
-    (10, BookingStatus.COMPLETED, "deposit"),
+    (2, BookingStatus.COMPLETED, "deposit"),
+    (10, BookingStatus.COMPLETED, "deposit+final"),
     (60, BookingStatus.COMPLETED, "deposit+final"),
-    (400, BookingStatus.COMPLETED, "deposit+final"),
     (0, BookingStatus.PENDING, None),
-    (-1, BookingStatus.APPROVED, None),
-    (1, BookingStatus.CANCELLED, None),
-    (3, BookingStatus.NO_SHOW, None),
 ]
 
 
-def _seed_static_data(db):
-    branch = db.query(LocationModel).filter_by(name=BRANCH_NAME).first()
+def _seed_branch(db, branch_data: dict):
+    branch = db.query(LocationModel).filter_by(name=branch_data["name"]).first()
     if branch is None:
         branch = LocationModel(
-            name=BRANCH_NAME, address="123 Nguyễn Huệ, Quận 1, TP.HCM", phone_number="0901234567"
+            name=branch_data["name"],
+            address=branch_data["address"],
+            phone_number=branch_data["phone_number"],
         )
         db.add(branch)
         db.flush()
 
-    services_data = [
-        ("Gel Manicure", "manicure", 45, 25.0),
-        ("Classic Manicure", "manicure", 30, 15.0),
-        ("Classic Pedicure", "pedicure", 40, 30.0),
-        ("Gel Pedicure", "pedicure", 50, 35.0),
-        ("Nail Art (per nail)", "nail_art", 15, 5.0),
-    ]
     services = []
-    for name, category, duration, price in services_data:
+    for name, category, description, duration_min, base_price in branch_data["services"]:
         service = db.query(ServiceModel).filter_by(branch_id=branch.id, name=name).first()
         if service is None:
             service = ServiceModel(
                 branch_id=branch.id,
                 name=name,
                 category=category,
-                duration_min=duration,
-                base_price=price,
+                description=description,
+                duration_min=duration_min,
+                base_price=base_price,
             )
             db.add(service)
             db.flush()
         services.append(service)
 
-    if not db.query(ServiceExtensionModel).filter_by(service_id=services[0].id).first():
-        db.add(
-            ServiceExtensionModel(
-                service_id=services[0].id,
-                name="Extra Long",
-                extra_price=5.0,
-                extra_duration_min=15,
-            )
-        )
-
     staff_members = []
-    for i, name in enumerate(["Thợ Lan", "Thợ Mai", "Thợ Hương"], start=1):
-        phone = f"090000000{i}"
+    for name in branch_data["staff_names"]:
+        phone = f"07{uuid.uuid5(uuid.NAMESPACE_DNS, branch_data['name'] + name).int % 10**9:09d}"
         user = db.query(UserModel).filter_by(phone_number=phone).first()
         if user is None:
             user = UserModel(phone_number=phone, status=UserStatus.ACTIVE, role=UserRole.STAFF)
@@ -134,16 +247,6 @@ def _seed_static_data(db):
                     )
                 )
                 shift_count += 1
-
-    if not db.query(DiscountModel).filter_by(name="Big spender gift").first():
-        db.add(
-            DiscountModel(
-                name="Big spender gift",
-                discount_type=DiscountType.GIFT,
-                value=80,
-                branch_id=branch.id,
-            )
-        )
 
     db.flush()
     return branch, services, staff_members, shift_count
@@ -192,12 +295,7 @@ def _create_booking(db, customer, service, staff, branch_id, start_time, status)
     return booking
 
 
-def _seed_dynamic_data(db, branch, services, staff_members):
-    customers = [
-        _get_or_create_customer(db, "0911111111"),
-        _get_or_create_customer(db, "0922222222"),
-    ]
-
+def _seed_branch_activity(db, branch, services, staff_members, customers):
     now = datetime.now(timezone.utc)
     booking_count = 0
     payment_count = 0
@@ -243,21 +341,31 @@ def _seed_dynamic_data(db, branch, services, staff_members):
                 )
                 payment_count += 1
 
-    for _ in range(2):
-        db.add(
-            QueueTicketModel(
-                ticket_number=f"W-SEED{uuid.uuid4().hex[:6].upper()}",
-                branch_id=branch.id,
-                ticket_type=QueueTicketType.WALKIN,
-                status=QueueTicketStatus.WAITING,
-            )
+    db.add(
+        QueueTicketModel(
+            ticket_number=f"W-SEED{uuid.uuid4().hex[:6].upper()}",
+            branch_id=branch.id,
+            ticket_type=QueueTicketType.WALKIN,
+            status=QueueTicketStatus.WAITING,
         )
+    )
+
+    return booking_count, payment_count
+
+
+def seed() -> None:
+    db = SessionLocal()
+
+    customers = [
+        _get_or_create_customer(db, "07911111111"),
+        _get_or_create_customer(db, "07922222222"),
+    ]
 
     db.add(
         CustomDesignModel(
             customer_id=customers[0].id,
             image_url="https://res.cloudinary.com/demo/image/upload/sample-summer.jpg",
-            description="Hoa văn mùa hè",
+            description="Summer floral set",
             estimated_price=None,
         )
     )
@@ -265,34 +373,30 @@ def _seed_dynamic_data(db, branch, services, staff_members):
         CustomDesignModel(
             customer_id=customers[1].id,
             image_url="https://res.cloudinary.com/demo/image/upload/sample-3d.jpg",
-            description="Nail art 3D",
+            description="3D nail art",
             estimated_price=20.0,
         )
     )
 
-    return len(customers), booking_count, payment_count
-
-
-def seed() -> None:
-    db = SessionLocal()
-
-    branch, services, staff_members, shift_count = _seed_static_data(db)
-    customer_count, booking_count, payment_count = _seed_dynamic_data(
-        db, branch, services, staff_members
-    )
+    summary = []
+    for branch_data in BRANCHES:
+        branch, services, staff_members, shift_count = _seed_branch(db, branch_data)
+        booking_count, payment_count = _seed_branch_activity(
+            db, branch, services, staff_members, customers
+        )
+        summary.append(
+            (branch.name, branch.id, len(services), len(staff_members), shift_count, booking_count)
+        )
 
     db.commit()
-    branch_name, branch_id = branch.name, branch.id
     db.close()
 
-    print(f"Branch: {branch_name} ({branch_id})")
-    print(f"Services: {len(services)}, staff: {len(staff_members)}, new shifts: {shift_count}")
-    print(f"Customers: {customer_count}")
-    print(
-        f"Bookings: {booking_count} (spanning today / this week / this month / this year / last year)"
-    )
-    print(f"Payment transactions: {payment_count}")
-    print("Queue tickets: 2 walk-in waiting")
+    for name, branch_id, service_count, staff_count, shift_count, booking_count in summary:
+        print(
+            f"{name} ({branch_id}): {service_count} services, {staff_count} staff, "
+            f"{shift_count} new shifts, {booking_count} bookings"
+        )
+    print(f"Customers: {len(customers)}")
     print("Custom designs: 2 (1 priced, 1 pending)")
 
 
