@@ -10,6 +10,7 @@ from app.auth.application.google_login import (
     GoogleEmailNotVerifiedError,
     login_or_register_with_google,
 )
+from app.auth.application.login_user import LoginUseCase
 from app.auth.application.register_user import RegisterUserUseCase
 from app.auth.application.verify_otp import VerifyOtpUseCase
 from app.auth.domain.exceptions import (
@@ -29,6 +30,7 @@ from app.auth.infrastructure.jwt_provider import JwtTokenProvider
 from app.auth.infrastructure.otp_repository_impl import RedisOtpRepository
 from app.auth.infrastructure.repository_impl import SqlAlchemyUserRepository
 from app.auth.presentation.schemas import (
+    LoginRequest,
     RegisterRequest,
     RegisterResponse,
     VerifyOtpRequest,
@@ -69,6 +71,38 @@ def register(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this identifier is already active",
+        )
+
+    return RegisterResponse(
+        pending_id=result.pending_id, expires_in_seconds=result.expires_in_seconds
+    )
+
+
+@router.post(
+    "/login",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_200_OK,
+)
+@limiter.limit("5/minute")
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+) -> RegisterResponse:
+    use_case = LoginUseCase(
+        user_repository=SqlAlchemyUserRepository(db),
+        otp_repository=RedisOtpRepository(redis_client),
+    )
+
+    try:
+        result = use_case.execute(
+            RegisterUserInput(phone_number=payload.phone_number, email=payload.email)
+        )
+    except UserNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with this identifier",
         )
 
     return RegisterResponse(
