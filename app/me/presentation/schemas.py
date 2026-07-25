@@ -1,7 +1,21 @@
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
+
+
+class MyProfileResponse(BaseModel):
+    id: UUID
+    phone_number: str | None
+    email: str | None
+    role: str
+    status: str
+    created_at: datetime
+
+
+class MyProfileUpdateRequest(BaseModel):
+    phone_number: str | None = None
+    email: str | None = None
 
 
 class MyBookingSummary(BaseModel):
