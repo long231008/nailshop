@@ -153,22 +153,23 @@ XINH_STUDIO_SERVICES = [
 BRANCHES = [
     {
         "name": "Major Nails",
-        "address": None,
-        "phone_number": None,
-        "services": MAJOR_NAILS_SERVICES,
+        "address": "The Precinct, Boverton Rd, Llantwit Major, CF61 1XA",
+        "phone_number": "01446621342",
+        # Major Nails also offers the same head massage menu as XINH Studio.
+        "services": MAJOR_NAILS_SERVICES + XINH_STUDIO_SERVICES,
         "staff_names": ["Amy", "Kate"],
     },
     {
         "name": "MJ Nails",
-        "address": None,
-        "phone_number": None,
+        "address": "5 Penny Lane, Cowbridge, Vale of Glamorgan, CF71 7EG",
+        "phone_number": "01446771990",
         "services": MJ_NAILS_SERVICES,
         "staff_names": ["Jess", "Lily"],
     },
     {
         "name": "XINH STUDIO",
-        "address": "Unit 3, The Precinct, Boverton Road, Llantwit Major, CF61 1XA",
-        "phone_number": "01446621342",
+        "address": "Unit 1, Town Hall Square, Cowbridge, CF71 7DD",
+        "phone_number": None,
         "services": XINH_STUDIO_SERVICES,
         "staff_names": ["Linh"],
     },
@@ -196,6 +197,10 @@ def _seed_branch(db, branch_data: dict):
         )
         db.add(branch)
         db.flush()
+    else:
+        # Contact details are authoritative here - keep existing rows up to date.
+        branch.address = branch_data["address"]
+        branch.phone_number = branch_data["phone_number"]
 
     services = []
     for name, category, description, duration_min, base_price in branch_data["services"]:

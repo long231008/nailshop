@@ -20,6 +20,14 @@ from app.auth.domain.exceptions import (
     UserBlockedError,
     UserNotFoundError,
 )
+from app.auth.infrastructure.facebook_oauth import (
+    FacebookNotConfiguredError,
+    FacebookProfileError,
+    FacebookTokenExchangeError,
+    build_facebook_authorization_url,
+    exchange_code_for_access_token,
+    fetch_user_email,
+)
 from app.auth.infrastructure.google_oauth import (
     GoogleTokenExchangeError,
     InvalidGoogleTokenError,
@@ -48,6 +56,14 @@ from app.shared.infrastructure.rate_limit import limiter
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 GOOGLE_STATE_TTL_SECONDS = 5 * 60
+FACEBOOK_STATE_TTL_SECONDS = 5 * 60
+
+
+def _social_login_redirect(result) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.FRONTEND_URL}/auth/callback"
+        f"#token={result.access_token}&user_id={result.user_id}&role={result.role.value}"
+    )
 
 
 def _request_otp(
@@ -238,7 +254,65 @@ def google_callback(
             detail="This account has been blocked. Please contact the salon.",
         )
 
-    return RedirectResponse(
-        f"{settings.FRONTEND_URL}/auth/callback"
-        f"#token={result.access_token}&user_id={result.user_id}&role={result.role.value}"
-    )
+    return _social_login_redirect(result)
+
+
+@router.get("/facebook/login")
+def facebook_login(redis_client: Redis = Depends(get_redis)) -> RedirectResponse:
+    state = secrets.token_urlsafe(24)
+    try:
+        url = build_facebook_authorization_url(state)
+    except FacebookNotConfiguredError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Facebook login is not configured",
+        )
+    redis_client.set(f"oauth:facebook:state:{state}", "1", ex=FACEBOOK_STATE_TTL_SECONDS)
+    return RedirectResponse(url)
+
+
+@router.get("/facebook/callback")
+def facebook_callback(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+) -> RedirectResponse:
+    state_key = f"oauth:facebook:state:{state}"
+    if redis_client.get(state_key) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OAuth state",
+        )
+    redis_client.delete(state_key)
+
+    try:
+        access_token = exchange_code_for_access_token(code)
+        email = fetch_user_email(access_token)
+    except (FacebookTokenExchangeError, FacebookProfileError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Facebook authentication failed",
+        )
+
+    try:
+        # Facebook only exposes confirmed emails, so the flow is the same as
+        # Google's verified-email login.
+        result = login_or_register_with_google(
+            user_repository=SqlAlchemyUserRepository(db),
+            token_provider=JwtTokenProvider(),
+            email=email,
+            email_verified=email is not None,
+        )
+    except GoogleEmailNotVerifiedError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your Facebook account has no email we can use. Please log in with your phone number instead.",
+        )
+    except UserBlockedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been blocked. Please contact the salon.",
+        )
+
+    return _social_login_redirect(result)

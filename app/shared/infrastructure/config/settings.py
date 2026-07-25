@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str
     GOOGLE_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/google/callback"
+    # Optional - Facebook login stays disabled until both are set.
+    FACEBOOK_APP_ID: str = ""
+    FACEBOOK_APP_SECRET: str = ""
+    FACEBOOK_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/facebook/callback"
     FRONTEND_URL: str = "http://localhost:5173"
     CORS_ALLOWED_ORIGINS: str = "*"
     ALLOWED_HOSTS: str = "*"
