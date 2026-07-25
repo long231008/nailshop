@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -23,6 +24,10 @@ from app.shared.infrastructure.database.session import SessionLocal
 from app.shifts.presentation.routers import router as shifts_router
 from app.staff.presentation.routers import router as staff_router
 from app.webhooks.presentation.routers import router as webhooks_router
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+)
 
 SOFT_LOCK_CHECK_INTERVAL_SECONDS = 60
 
