@@ -11,9 +11,7 @@ from app.bookings.infrastructure.models import (
 )
 
 
-def complete_booking_detail(
-    db: Session, booking_id: UUID, booking_detail_id: UUID
-) -> BookingModel:
+def complete_booking_detail(db: Session, booking_id: UUID, booking_detail_id: UUID) -> BookingModel:
     booking = db.get(BookingModel, booking_id)
     if booking is None:
         raise BookingNotFoundError()

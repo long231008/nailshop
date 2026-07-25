@@ -1,7 +1,5 @@
 def test_create_branch_requires_admin(client):
-    response = client.post(
-        "/app/branches", json={"name": "Downtown", "address": "123 Main St"}
-    )
+    response = client.post("/app/branches", json={"name": "Downtown", "address": "123 Main St"})
     assert response.status_code == 401
 
 
@@ -14,9 +12,7 @@ def test_customer_cannot_create_branch(client, customer_headers):
     assert response.status_code == 403
 
 
-def test_admin_can_create_and_list_branches_with_services(
-    client, admin_headers, cleanup_records
-):
+def test_admin_can_create_and_list_branches_with_services(client, admin_headers, cleanup_records):
     branch_response = client.post(
         "/app/branches",
         json={"name": "Downtown", "address": "123 Main St", "phone_number": "0123456789"},

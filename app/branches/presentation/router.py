@@ -6,13 +6,13 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.branches.infrastructure.models import LocationModel
 from app.branches.presentation.schemas import (
     BranchCreateRequest,
     BranchResponse,
     BranchServiceSummary,
     BranchUpdateRequest,
 )
-from app.branches.infrastructure.models import LocationModel
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
@@ -104,8 +104,11 @@ def update_branch(
         phone_number=branch.phone_number,
         services=[
             BranchServiceSummary(
-                id=s.id, name=s.name, category=s.category,
-                duration_min=s.duration_min, base_price=float(s.base_price),
+                id=s.id,
+                name=s.name,
+                category=s.category,
+                duration_min=s.duration_min,
+                base_price=float(s.base_price),
             )
             for s in services
         ],

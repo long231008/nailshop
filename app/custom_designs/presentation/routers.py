@@ -103,9 +103,7 @@ def set_custom_design_price(
     try:
         design = set_estimated_price(db, design_id, payload.estimated_price)
     except CustomDesignNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Custom design not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Custom design not found")
     except CustomDesignAlreadyDecidedError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -133,9 +131,7 @@ def accept_custom_design_endpoint(
             payload.start_time,
         )
     except CustomDesignNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Custom design not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Custom design not found")
     except CustomDesignNotOwnedError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -165,9 +161,7 @@ def reject_custom_design_endpoint(
     try:
         design = reject_custom_design(db, current_user.id, design_id)
     except CustomDesignNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Custom design not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Custom design not found")
     except CustomDesignNotOwnedError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -2,7 +2,12 @@ import uuid as uuid_lib
 
 
 def _create_booking(
-    client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
     cleanup_records,
 ):
     payload = {
@@ -24,11 +29,23 @@ def _create_booking(
 
 
 def test_approve_booking_creates_soft_lock_and_deposit(
-    client, admin_headers, customer_headers, fake_redis,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    fake_redis,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     booking = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
 
@@ -46,11 +63,22 @@ def test_approve_booking_creates_soft_lock_and_deposit(
 
 
 def test_cannot_approve_twice(
-    client, admin_headers, customer_headers,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     booking = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
     client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
@@ -61,11 +89,22 @@ def test_cannot_approve_twice(
 
 
 def test_customer_can_view_own_status_but_not_others(
-    client, customer_headers, other_customer_headers,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records,
+    client,
+    customer_headers,
+    other_customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     booking = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
 
@@ -77,11 +116,22 @@ def test_customer_can_view_own_status_but_not_others(
 
 
 def test_start_service_and_complete_flow(
-    client, admin_headers, customer_headers, seeded_staff,
-    seeded_branch, seeded_service, seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_staff,
+    seeded_branch,
+    seeded_service,
+    seeded_shift,
+    cleanup_records,
 ):
     booking = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
     client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
@@ -105,11 +155,22 @@ def test_start_service_and_complete_flow(
 
 
 def test_staff_cannot_start_service_while_busy_with_another(
-    client, admin_headers, customer_headers, seeded_staff,
-    seeded_branch, seeded_service, seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_staff,
+    seeded_branch,
+    seeded_service,
+    seeded_shift,
+    cleanup_records,
 ):
     first = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
     client.post(f"/app/bookings/{first['id']}/approve", headers=admin_headers)
@@ -125,9 +186,7 @@ def test_staff_cannot_start_service_while_busy_with_another(
             {
                 "service_id": str(seeded_service),
                 "staff_id": str(seeded_staff["staff_id"]),
-                "start_time": (
-                    seeded_shift["start"].replace(hour=13)
-                ).isoformat(),
+                "start_time": (seeded_shift["start"].replace(hour=13)).isoformat(),
             }
         ],
     }
@@ -145,11 +204,23 @@ def test_staff_cannot_start_service_while_busy_with_another(
 
 
 def test_no_show_marks_booking_and_writes_audit_log(
-    client, admin_headers, customer_headers,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records, db_session,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
 ):
     booking = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
     client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
@@ -174,11 +245,23 @@ def test_no_show_marks_booking_and_writes_audit_log(
 
 
 def test_complete_manual_final_price_and_bill(
-    client, admin_headers, customer_headers,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records, db_session,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
 ):
     booking = _create_booking(
-        client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
         cleanup_records,
     )
     client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)

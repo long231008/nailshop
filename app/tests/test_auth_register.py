@@ -62,11 +62,7 @@ def test_register_again_while_pending_reuses_row_and_regenerates_otp(
     assert second_pending_id == first_pending_id
     assert second_otp != first_otp
 
-    count = (
-        db_session.query(UserModel)
-        .filter(UserModel.phone_number == unique_phone)
-        .count()
-    )
+    count = db_session.query(UserModel).filter(UserModel.phone_number == unique_phone).count()
     assert count == 1
 
 

@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
-from app.discounts.presentation.schemas import DiscountCreateRequest, DiscountResponse
 from app.discounts.infrastructure.models import DiscountModel, DiscountType
+from app.discounts.presentation.schemas import DiscountCreateRequest, DiscountResponse
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
 

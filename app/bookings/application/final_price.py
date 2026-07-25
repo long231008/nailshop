@@ -11,9 +11,7 @@ def set_final_price(db: Session, booking_id: UUID, final_price: float) -> Bookin
     if booking is None:
         raise BookingNotFoundError()
     if booking.status != BookingStatus.COMPLETED:
-        raise InvalidBookingStateError(
-            "Final price can only be set after the booking is completed"
-        )
+        raise InvalidBookingStateError("Final price can only be set after the booking is completed")
 
     booking.final_price = final_price
     db.commit()

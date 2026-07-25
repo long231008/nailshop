@@ -48,9 +48,7 @@ def expire_unpaid_soft_locks(db: Session, redis_client: Redis) -> int:
                 action="booking.soft_lock_expired",
                 entity_type="booking",
                 entity_id=booking.id,
-                details={
-                    "reason": "deposit not received within the 15-minute soft-lock window"
-                },
+                details={"reason": "deposit not received within the 15-minute soft-lock window"},
             )
         )
         expired_count += 1

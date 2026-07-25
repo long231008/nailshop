@@ -57,9 +57,7 @@ def _to_detail_response(detail: BookingDetailModel) -> BookingDetailResponse:
 def _to_booking_response(
     db: Session, booking: BookingModel, gift_message: str | None = None
 ) -> BookingResponse:
-    details = (
-        db.query(BookingDetailModel).filter(BookingDetailModel.booking_id == booking.id).all()
-    )
+    details = db.query(BookingDetailModel).filter(BookingDetailModel.booking_id == booking.id).all()
     return BookingResponse(
         id=booking.id,
         customer_id=booking.customer_id,

@@ -30,7 +30,10 @@ def test_expires_approved_booking_without_soft_lock_or_payment(
     db_session, fake_redis, cleanup_records, customer_identity, seeded_branch
 ):
     booking = _create_booking(
-        db_session, cleanup_records, customer_identity["id"], seeded_branch,
+        db_session,
+        cleanup_records,
+        customer_identity["id"],
+        seeded_branch,
         BookingStatus.APPROVED,
     )
 
@@ -56,7 +59,10 @@ def test_does_not_expire_booking_while_soft_lock_still_active(
     db_session, fake_redis, cleanup_records, customer_identity, seeded_branch
 ):
     booking = _create_booking(
-        db_session, cleanup_records, customer_identity["id"], seeded_branch,
+        db_session,
+        cleanup_records,
+        customer_identity["id"],
+        seeded_branch,
         BookingStatus.APPROVED,
     )
     fake_redis.set(f"booking:soft_lock:{booking.id}", "awaiting_deposit", ex=900)
@@ -72,7 +78,10 @@ def test_does_not_expire_booking_with_successful_deposit(
     db_session, fake_redis, cleanup_records, customer_identity, seeded_branch
 ):
     booking = _create_booking(
-        db_session, cleanup_records, customer_identity["id"], seeded_branch,
+        db_session,
+        cleanup_records,
+        customer_identity["id"],
+        seeded_branch,
         BookingStatus.APPROVED,
     )
     transaction = PaymentTransactionModel(
@@ -97,7 +106,10 @@ def test_ignores_non_approved_bookings(
     db_session, fake_redis, cleanup_records, customer_identity, seeded_branch
 ):
     booking = _create_booking(
-        db_session, cleanup_records, customer_identity["id"], seeded_branch,
+        db_session,
+        cleanup_records,
+        customer_identity["id"],
+        seeded_branch,
         BookingStatus.PENDING,
     )
 

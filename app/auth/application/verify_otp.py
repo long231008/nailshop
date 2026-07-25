@@ -32,9 +32,7 @@ class VerifyOtpUseCase:
         user.status = UserStatus.ACTIVE
         user = self._user_repository.update(user)
 
-        access_token = self._token_provider.create_access_token(
-            user_id=user.id, role=user.role
-        )
+        access_token = self._token_provider.create_access_token(user_id=user.id, role=user.role)
 
         return VerifyOtpOutput(
             access_token=access_token,

@@ -39,7 +39,12 @@ def _create_transaction(db_session, cleanup_records, booking_id, amount, transac
 
 
 def test_dashboard_summary_counts_bookings_and_queue(
-    client, admin_headers, seeded_branch, seeded_staff, cleanup_records, db_session,
+    client,
+    admin_headers,
+    seeded_branch,
+    seeded_staff,
+    cleanup_records,
+    db_session,
     customer_identity,
 ):
     _create_booking(db_session, cleanup_records, customer_identity["id"], seeded_branch)
@@ -65,16 +70,29 @@ def test_dashboard_summary_requires_admin(client, customer_headers):
 
 
 def test_dashboard_revenue_separates_deposit_and_total(
-    client, admin_headers, seeded_branch, cleanup_records, db_session, customer_identity,
+    client,
+    admin_headers,
+    seeded_branch,
+    cleanup_records,
+    db_session,
+    customer_identity,
 ):
     booking = _create_booking(db_session, cleanup_records, customer_identity["id"], seeded_branch)
     _create_transaction(
-        db_session, cleanup_records, booking.id, 30.0,
-        PaymentTransactionType.DEPOSIT, PaymentTransactionStatus.SUCCESS,
+        db_session,
+        cleanup_records,
+        booking.id,
+        30.0,
+        PaymentTransactionType.DEPOSIT,
+        PaymentTransactionStatus.SUCCESS,
     )
     _create_transaction(
-        db_session, cleanup_records, booking.id, 70.0,
-        PaymentTransactionType.FINAL_PAYMENT, PaymentTransactionStatus.SUCCESS,
+        db_session,
+        cleanup_records,
+        booking.id,
+        70.0,
+        PaymentTransactionType.FINAL_PAYMENT,
+        PaymentTransactionStatus.SUCCESS,
     )
 
     response = client.get(
@@ -90,16 +108,29 @@ def test_dashboard_revenue_separates_deposit_and_total(
 
 
 def test_dashboard_revenue_ignores_pending_and_failed_transactions(
-    client, admin_headers, seeded_branch, cleanup_records, db_session, customer_identity,
+    client,
+    admin_headers,
+    seeded_branch,
+    cleanup_records,
+    db_session,
+    customer_identity,
 ):
     booking = _create_booking(db_session, cleanup_records, customer_identity["id"], seeded_branch)
     _create_transaction(
-        db_session, cleanup_records, booking.id, 999.0,
-        PaymentTransactionType.DEPOSIT, PaymentTransactionStatus.PENDING,
+        db_session,
+        cleanup_records,
+        booking.id,
+        999.0,
+        PaymentTransactionType.DEPOSIT,
+        PaymentTransactionStatus.PENDING,
     )
     _create_transaction(
-        db_session, cleanup_records, booking.id, 999.0,
-        PaymentTransactionType.DEPOSIT, PaymentTransactionStatus.FAILED,
+        db_session,
+        cleanup_records,
+        booking.id,
+        999.0,
+        PaymentTransactionType.DEPOSIT,
+        PaymentTransactionStatus.FAILED,
     )
 
     response = client.get(
@@ -113,7 +144,12 @@ def test_dashboard_revenue_ignores_pending_and_failed_transactions(
 
 
 def test_dashboard_revenue_scoped_to_branch(
-    client, admin_headers, seeded_branch, cleanup_records, db_session, customer_identity,
+    client,
+    admin_headers,
+    seeded_branch,
+    cleanup_records,
+    db_session,
+    customer_identity,
 ):
     other_branch = client.post(
         "/app/branches",
@@ -126,8 +162,12 @@ def test_dashboard_revenue_scoped_to_branch(
         db_session, cleanup_records, customer_identity["id"], other_branch["id"]
     )
     _create_transaction(
-        db_session, cleanup_records, other_booking.id, 500.0,
-        PaymentTransactionType.DEPOSIT, PaymentTransactionStatus.SUCCESS,
+        db_session,
+        cleanup_records,
+        other_booking.id,
+        500.0,
+        PaymentTransactionType.DEPOSIT,
+        PaymentTransactionStatus.SUCCESS,
     )
 
     response = client.get(

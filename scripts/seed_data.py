@@ -7,6 +7,7 @@ existing rows are reused instead of duplicated. Dynamic data (customers,
 bookings, payments, queue tickets, custom designs) is always added fresh
 so re-running gives you more sample activity to look at.
 """
+
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -76,13 +77,14 @@ def _seed_static_data(db):
     ]
     services = []
     for name, category, duration, price in services_data:
-        service = (
-            db.query(ServiceModel).filter_by(branch_id=branch.id, name=name).first()
-        )
+        service = db.query(ServiceModel).filter_by(branch_id=branch.id, name=name).first()
         if service is None:
             service = ServiceModel(
-                branch_id=branch.id, name=name, category=category,
-                duration_min=duration, base_price=price,
+                branch_id=branch.id,
+                name=name,
+                category=category,
+                duration_min=duration,
+                base_price=price,
             )
             db.add(service)
             db.flush()
@@ -91,8 +93,10 @@ def _seed_static_data(db):
     if not db.query(ServiceExtensionModel).filter_by(service_id=services[0].id).first():
         db.add(
             ServiceExtensionModel(
-                service_id=services[0].id, name="Extra Long",
-                extra_price=5.0, extra_duration_min=15,
+                service_id=services[0].id,
+                name="Extra Long",
+                extra_price=5.0,
+                extra_duration_min=15,
             )
         )
 
@@ -134,8 +138,10 @@ def _seed_static_data(db):
     if not db.query(DiscountModel).filter_by(name="Big spender gift").first():
         db.add(
             DiscountModel(
-                name="Big spender gift", discount_type=DiscountType.GIFT,
-                value=80, branch_id=branch.id,
+                name="Big spender gift",
+                discount_type=DiscountType.GIFT,
+                value=80,
+                branch_id=branch.id,
             )
         )
 
@@ -282,7 +288,9 @@ def seed() -> None:
     print(f"Branch: {branch_name} ({branch_id})")
     print(f"Services: {len(services)}, staff: {len(staff_members)}, new shifts: {shift_count}")
     print(f"Customers: {customer_count}")
-    print(f"Bookings: {booking_count} (spanning today / this week / this month / this year / last year)")
+    print(
+        f"Bookings: {booking_count} (spanning today / this week / this month / this year / last year)"
+    )
     print(f"Payment transactions: {payment_count}")
     print("Queue tickets: 2 walk-in waiting")
     print("Custom designs: 2 (1 priced, 1 pending)")

@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
-from app.shifts.infrastructure.models import StaffRosterModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
+from app.shifts.infrastructure.models import StaffRosterModel
 from app.shifts.presentation.schemas import ShiftCreateRequest, ShiftResponse
 
 router = APIRouter(prefix="/shifts", tags=["shifts"])
@@ -38,8 +38,11 @@ def list_shifts(
 
     return [
         ShiftResponse(
-            id=s.id, staff_id=s.staff_id, branch_id=s.branch_id,
-            start_time=s.start_time, end_time=s.end_time,
+            id=s.id,
+            staff_id=s.staff_id,
+            branch_id=s.branch_id,
+            start_time=s.start_time,
+            end_time=s.end_time,
         )
         for s in shifts
     ]

@@ -50,8 +50,15 @@ def test_list_discounts_filters_by_type_and_active(client, admin_headers, cleanu
 
 
 def test_list_bookings_filters(
-    client, admin_headers, customer_headers, customer_identity,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    customer_identity,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     payload = {
         "branch_id": str(seeded_branch),
@@ -95,9 +102,7 @@ def test_list_custom_designs_filters_by_priced(
     ).json()
     cleanup_records.append(("custom_designs", created["id"]))
 
-    unpriced = client.get(
-        "/app/custom-designs", params={"priced": False}, headers=admin_headers
-    )
+    unpriced = client.get("/app/custom-designs", params={"priced": False}, headers=admin_headers)
     assert created["id"] in [d["id"] for d in unpriced.json()]
 
     priced = client.get("/app/custom-designs", params={"priced": True}, headers=admin_headers)

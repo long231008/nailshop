@@ -183,9 +183,7 @@ def cleanup_identifiers(db_session):
     yield identifiers
     if identifiers["phones"] or identifiers["emails"]:
         db_session.execute(
-            text(
-                "DELETE FROM users WHERE phone_number = ANY(:phones) OR email = ANY(:emails)"
-            ),
+            text("DELETE FROM users WHERE phone_number = ANY(:phones) OR email = ANY(:emails)"),
             {"phones": identifiers["phones"], "emails": identifiers["emails"]},
         )
         db_session.commit()

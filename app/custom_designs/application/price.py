@@ -9,9 +9,7 @@ from app.custom_designs.application.exceptions import (
 from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 
 
-def set_estimated_price(
-    db: Session, design_id: UUID, estimated_price: float
-) -> CustomDesignModel:
+def set_estimated_price(db: Session, design_id: UUID, estimated_price: float) -> CustomDesignModel:
     design = db.get(CustomDesignModel, design_id)
     if design is None:
         raise CustomDesignNotFoundError()

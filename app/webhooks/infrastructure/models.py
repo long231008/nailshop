@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Numeric, String
+from sqlalchemy import DateTime, ForeignKey, Numeric, String
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,9 +31,7 @@ class PaymentTransactionModel(Base):
     booking_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("bookings.id"), nullable=False
     )
-    provider_transaction_id: Mapped[str] = mapped_column(
-        String(255), nullable=False, unique=True
-    )
+    provider_transaction_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     transaction_type: Mapped[PaymentTransactionType] = mapped_column(
         SAEnum(

@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.shared.infrastructure.database.session import get_db
+from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.staff.application.schedule import get_staff_schedule
 from app.staff.application.start_service import (
     BookingDetailNotFoundError,
@@ -18,8 +20,6 @@ from app.staff.presentation.schemas import (
     StaffShift,
     StartServiceRequest,
 )
-from app.shared.infrastructure.database.session import get_db
-from app.shared.presentation.dependencies import CurrentUser, require_roles
 
 router = APIRouter(prefix="/staff", tags=["staff"])
 

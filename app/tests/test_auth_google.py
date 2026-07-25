@@ -7,9 +7,7 @@ from app.auth.infrastructure.models import UserModel
 
 
 def _mock_google(monkeypatch, email, email_verified=True):
-    monkeypatch.setattr(
-        router_module, "exchange_code_for_id_token", lambda code: "fake-id-token"
-    )
+    monkeypatch.setattr(router_module, "exchange_code_for_id_token", lambda code: "fake-id-token")
     monkeypatch.setattr(
         router_module,
         "verify_id_token",
@@ -48,9 +46,7 @@ def test_google_callback_creates_new_active_customer(
     _mock_google(monkeypatch, email=email)
     state = _login_and_get_state(client)
 
-    response = client.get(
-        "/app/auth/google/callback", params={"code": "fake-code", "state": state}
-    )
+    response = client.get("/app/auth/google/callback", params={"code": "fake-code", "state": state})
 
     assert response.status_code == 200
     body = response.json()
@@ -73,9 +69,7 @@ def test_google_callback_links_existing_user_by_email(
     _mock_google(monkeypatch, email=email)
     state = _login_and_get_state(client)
 
-    response = client.get(
-        "/app/auth/google/callback", params={"code": "fake-code", "state": state}
-    )
+    response = client.get("/app/auth/google/callback", params={"code": "fake-code", "state": state})
 
     assert response.status_code == 200
     assert response.json()["user_id"] == str(existing_user.id)
@@ -96,8 +90,6 @@ def test_google_callback_rejects_unverified_email(client, fake_redis, monkeypatc
     _mock_google(monkeypatch, email="unverified@example.com", email_verified=False)
     state = _login_and_get_state(client)
 
-    response = client.get(
-        "/app/auth/google/callback", params={"code": "fake-code", "state": state}
-    )
+    response = client.get("/app/auth/google/callback", params={"code": "fake-code", "state": state})
 
     assert response.status_code == 400

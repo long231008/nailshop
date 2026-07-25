@@ -50,8 +50,15 @@ def test_admin_grants_permission_then_staff_can_price(
 
 
 def test_full_accept_flow_creates_booking_with_design_price(
-    client, admin_headers, customer_headers, seeded_branch, seeded_service, seeded_staff,
-    seeded_shift, cleanup_records, db_session,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
 ):
     design = _upload_design(client, customer_headers)
     cleanup_records.append(("custom_designs", design["id"]))
@@ -100,7 +107,12 @@ def test_full_accept_flow_creates_booking_with_design_price(
 
 
 def test_cannot_accept_unpriced_design(
-    client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
     cleanup_records,
 ):
     design = _upload_design(client, customer_headers)
@@ -130,9 +142,7 @@ def test_reject_design(client, admin_headers, customer_headers, cleanup_records)
         headers=admin_headers,
     )
 
-    response = client.post(
-        f"/app/custom-designs/{design['id']}/reject", headers=customer_headers
-    )
+    response = client.post(f"/app/custom-designs/{design['id']}/reject", headers=customer_headers)
 
     assert response.status_code == 200
     assert response.json()["status"] == "rejected"
@@ -142,7 +152,10 @@ def test_reject_design(client, admin_headers, customer_headers, cleanup_records)
 
 
 def test_other_customer_cannot_decide_on_design(
-    client, customer_headers, other_customer_headers, cleanup_records,
+    client,
+    customer_headers,
+    other_customer_headers,
+    cleanup_records,
 ):
     design = _upload_design(client, customer_headers)
     cleanup_records.append(("custom_designs", design["id"]))
@@ -155,7 +168,10 @@ def test_other_customer_cannot_decide_on_design(
 
 
 def test_me_custom_designs_shows_own_designs_only(
-    client, customer_headers, other_customer_headers, cleanup_records,
+    client,
+    customer_headers,
+    other_customer_headers,
+    cleanup_records,
 ):
     mine = _upload_design(client, customer_headers)
     cleanup_records.append(("custom_designs", mine["id"]))

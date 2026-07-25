@@ -8,8 +8,15 @@ def test_reserve_staff(client, admin_headers, seeded_staff):
 
 
 def test_block_staff_deletes_future_shifts_and_unassigns_future_bookings(
-    client, admin_headers, customer_headers, seeded_branch, seeded_service, seeded_staff,
-    seeded_shift, cleanup_records, db_session,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
 ):
     booking_payload = {
         "branch_id": str(seeded_branch),

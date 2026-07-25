@@ -7,9 +7,7 @@ from app.auth.domain.value_object import UserRole
 
 class UserRepository(ABC):
     @abstractmethod
-    def find_by_identifier(
-        self, phone_number: str | None, email: str | None
-    ) -> User | None:
+    def find_by_identifier(self, phone_number: str | None, email: str | None) -> User | None:
         raise NotImplementedError
 
     @abstractmethod

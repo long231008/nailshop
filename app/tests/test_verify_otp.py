@@ -43,20 +43,14 @@ def test_verify_otp_with_valid_code_activates_user_and_returns_jwt(
     assert fake_redis.get(f"otp:register:{pending_id}") is None
 
 
-def test_verify_otp_cannot_be_reused(
-    client, fake_redis, unique_phone, cleanup_identifiers
-):
+def test_verify_otp_cannot_be_reused(client, fake_redis, unique_phone, cleanup_identifiers):
     cleanup_identifiers["phones"].append(unique_phone)
     pending_id, otp_code = _register(client, fake_redis, unique_phone)
 
-    first = client.post(
-        "/app/auth/verify", json={"pending_id": pending_id, "otp_code": otp_code}
-    )
+    first = client.post("/app/auth/verify", json={"pending_id": pending_id, "otp_code": otp_code})
     assert first.status_code == 200
 
-    second = client.post(
-        "/app/auth/verify", json={"pending_id": pending_id, "otp_code": otp_code}
-    )
+    second = client.post("/app/auth/verify", json={"pending_id": pending_id, "otp_code": otp_code})
     assert second.status_code == 400
 
 

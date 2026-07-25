@@ -13,9 +13,7 @@ class SqlAlchemyUserRepository(UserRepository):
     def __init__(self, db: Session):
         self._db = db
 
-    def find_by_identifier(
-        self, phone_number: str | None, email: str | None
-    ) -> User | None:
+    def find_by_identifier(self, phone_number: str | None, email: str | None) -> User | None:
         conditions = []
         if phone_number:
             conditions.append(UserModel.phone_number == phone_number)

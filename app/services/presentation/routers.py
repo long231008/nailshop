@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
 from app.services.application.lengths import ServiceNotFoundError, add_service_length
+from app.services.infrastructure.models import ServiceModel
 from app.services.presentation.schemas import (
     ServiceCreateRequest,
     ServiceLengthCreateRequest,
@@ -12,7 +13,6 @@ from app.services.presentation.schemas import (
     ServiceResponse,
     ServiceUpdateRequest,
 )
-from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
 

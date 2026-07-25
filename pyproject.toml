@@ -1,0 +1,26 @@
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = ["venv", "migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+# E501: line length handled by the formatter, not worth failing CI over
+# UP017: this codebase consistently spells UTC as timezone.utc; not worth a repo-wide rename
+# UP042: this codebase consistently uses class X(str, Enum); not worth a repo-wide rename to StrEnum
+# B008: Depends(...)/Query(...) in FastAPI parameter defaults is the framework's own idiom, not a bug
+# B904: "raise ... from" chaining inside except blocks - real finding, ~38 occurrences,
+#   deferred as a follow-up cleanup rather than done as a drive-by in the same change that adds the linter
+ignore = ["E501", "UP017", "UP042", "B008", "B904"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.lint.per-file-ignores]
+# needs sys.path.insert() before it can import app.* since it runs standalone, outside the package
+"scripts/seed_data.py" = ["E402"]
+# Alembic's own generated template requires config parsing before importing app.* models
+"migrations/env.py" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"

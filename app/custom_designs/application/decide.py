@@ -39,9 +39,7 @@ def accept_custom_design(
 
     booking_request = BookingCreateRequest(
         branch_id=branch_id,
-        items=[
-            BookingItemRequest(service_id=service_id, staff_id=staff_id, start_time=start_time)
-        ],
+        items=[BookingItemRequest(service_id=service_id, staff_id=staff_id, start_time=start_time)],
     )
     booking, gift_message = create_booking(db, customer_id, booking_request)
 

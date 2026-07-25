@@ -1,6 +1,12 @@
 def test_booking_over_gift_threshold_returns_gift_message(
-    client, admin_headers, customer_headers, seeded_branch, seeded_service, seeded_staff,
-    seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     discount_response = client.post(
         "/app/discounts",
@@ -34,8 +40,14 @@ def test_booking_over_gift_threshold_returns_gift_message(
 
 
 def test_booking_under_gift_threshold_has_no_gift_message(
-    client, admin_headers, customer_headers, seeded_branch, seeded_service, seeded_staff,
-    seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     discount_response = client.post(
         "/app/discounts",
@@ -66,8 +78,14 @@ def test_booking_under_gift_threshold_has_no_gift_message(
 
 
 def test_gift_rule_scoped_to_other_branch_does_not_apply(
-    client, admin_headers, customer_headers, seeded_branch, seeded_service, seeded_staff,
-    seeded_shift, cleanup_records,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     import uuid
 

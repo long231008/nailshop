@@ -21,11 +21,7 @@ class DiscountCreateRequest(BaseModel):
             raise ValueError("value must be greater than 0")
         if self.discount_type == DiscountType.PERCENTAGE and self.value > 100:
             raise ValueError("percentage value cannot exceed 100")
-        if (
-            self.start_at is not None
-            and self.end_at is not None
-            and self.end_at <= self.start_at
-        ):
+        if self.start_at is not None and self.end_at is not None and self.end_at <= self.start_at:
             raise ValueError("end_at must be after start_at")
         return self
 

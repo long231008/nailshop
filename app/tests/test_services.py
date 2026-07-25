@@ -34,9 +34,7 @@ def test_filter_services_by_branch_and_category(client, admin_headers, cleanup_r
     matching = _create_service(client, admin_headers, cleanup_records, branch_id, "pedicure")
     _create_service(client, admin_headers, cleanup_records, None, "manicure")
 
-    response = client.get(
-        "/app/services", params={"branch_id": branch_id, "category": "pedicure"}
-    )
+    response = client.get("/app/services", params={"branch_id": branch_id, "category": "pedicure"})
 
     assert response.status_code == 200
     ids = [s["id"] for s in response.json()]

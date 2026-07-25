@@ -10,8 +10,16 @@ def _sign(body: bytes) -> str:
     return hmac.new(settings.PAYMENT_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
 
 
-def _create_booking(client, customer_headers, admin_headers, seeded_branch, seeded_service,
-                     seeded_staff, seeded_shift, cleanup_records):
+def _create_booking(
+    client,
+    customer_headers,
+    admin_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
     payload = {
         "branch_id": str(seeded_branch),
         "items": [
@@ -30,12 +38,26 @@ def _create_booking(client, customer_headers, admin_headers, seeded_branch, seed
 
 
 def test_webhook_processes_valid_signature_and_clears_soft_lock(
-    client, admin_headers, customer_headers, fake_redis,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records, db_session,
+    client,
+    admin_headers,
+    customer_headers,
+    fake_redis,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
 ):
     booking = _create_booking(
-        client, customer_headers, admin_headers, seeded_branch, seeded_service, seeded_staff,
-        seeded_shift, cleanup_records,
+        client,
+        customer_headers,
+        admin_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
+        cleanup_records,
     )
     assert fake_redis.get(f"booking:soft_lock:{booking['id']}") is not None
 
@@ -90,12 +112,25 @@ def test_webhook_rejects_invalid_signature(client, seeded_branch):
 
 
 def test_webhook_is_idempotent_on_replay(
-    client, admin_headers, customer_headers,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records, db_session,
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
 ):
     booking = _create_booking(
-        client, customer_headers, admin_headers, seeded_branch, seeded_service, seeded_staff,
-        seeded_shift, cleanup_records,
+        client,
+        customer_headers,
+        admin_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
+        cleanup_records,
     )
     transaction_id = str(uuid.uuid4())
     body = json.dumps(

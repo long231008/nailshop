@@ -6,7 +6,12 @@ def _start_time(seeded_shift, offset_minutes=0):
 
 
 def test_create_booking_happy_path(
-    client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
     cleanup_records,
 ):
     payload = {
@@ -33,7 +38,12 @@ def test_create_booking_happy_path(
 
 
 def test_create_booking_rejects_staff_conflict(
-    client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
     cleanup_records,
 ):
     payload = {
@@ -66,7 +76,12 @@ def test_create_booking_rejects_staff_conflict(
 
 
 def test_create_booking_rejects_over_daily_limit(
-    client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift,
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
     cleanup_records,
 ):
     # seeded_service duration is 30 min; 4 bookings x 30min = 120min (at the limit),
@@ -105,7 +120,9 @@ def test_create_booking_rejects_staff_role(
 ):
     payload = {
         "branch_id": str(seeded_branch),
-        "items": [{"service_id": str(seeded_service), "start_time": seeded_shift["start"].isoformat()}],
+        "items": [
+            {"service_id": str(seeded_service), "start_time": seeded_shift["start"].isoformat()}
+        ],
     }
 
     response = client.post("/app/bookings", json=payload, headers=staff_headers)

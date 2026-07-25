@@ -26,8 +26,14 @@ def test_availability_returns_slots_within_shift(
 
 
 def test_availability_excludes_booked_slot_with_buffer(
-    client, customer_headers, admin_headers, seeded_branch, seeded_service, seeded_staff,
-    seeded_shift, cleanup_records,
+    client,
+    customer_headers,
+    admin_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     booking_payload = {
         "branch_id": str(seeded_branch),

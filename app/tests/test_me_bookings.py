@@ -1,6 +1,12 @@
 def test_me_bookings_returns_only_own_bookings(
-    client, customer_headers, other_customer_headers,
-    seeded_branch, seeded_service, seeded_staff, seeded_shift, cleanup_records,
+    client,
+    customer_headers,
+    other_customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
 ):
     payload = {
         "branch_id": str(seeded_branch),

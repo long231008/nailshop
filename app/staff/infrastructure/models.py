@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,9 +34,7 @@ class StaffModel(Base):
         default=StaffStatus.ACTIVE,
         nullable=False,
     )
-    can_price_custom_designs: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
+    can_price_custom_designs: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
