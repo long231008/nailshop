@@ -39,6 +39,13 @@ def test_google_login_redirects_and_stores_state_in_redis(client, fake_redis):
     assert fake_redis.get(f"oauth:google:state:{state}") == "1"
 
 
+def _parse_callback_redirect(response) -> dict:
+    location = response.headers["location"]
+    assert location.startswith("http://localhost:5173/auth/callback#")
+    fragment = location.split("#", 1)[1]
+    return dict(pair.split("=", 1) for pair in fragment.split("&"))
+
+
 def test_google_callback_creates_new_active_customer(
     client, fake_redis, monkeypatch, cleanup_records
 ):
@@ -46,13 +53,17 @@ def test_google_callback_creates_new_active_customer(
     _mock_google(monkeypatch, email=email)
     state = _login_and_get_state(client)
 
-    response = client.get("/app/auth/google/callback", params={"code": "fake-code", "state": state})
+    response = client.get(
+        "/app/auth/google/callback",
+        params={"code": "fake-code", "state": state},
+        follow_redirects=False,
+    )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["role"] == "customer"
-    assert body["token_type"] == "bearer"
-    cleanup_records.append(("users", body["user_id"]))
+    assert response.status_code in (302, 307)
+    params = _parse_callback_redirect(response)
+    assert params["role"] == "customer"
+    assert params["token"]
+    cleanup_records.append(("users", params["user_id"]))
 
     assert fake_redis.get(f"oauth:google:state:{state}") is None
 
@@ -69,10 +80,15 @@ def test_google_callback_links_existing_user_by_email(
     _mock_google(monkeypatch, email=email)
     state = _login_and_get_state(client)
 
-    response = client.get("/app/auth/google/callback", params={"code": "fake-code", "state": state})
+    response = client.get(
+        "/app/auth/google/callback",
+        params={"code": "fake-code", "state": state},
+        follow_redirects=False,
+    )
 
-    assert response.status_code == 200
-    assert response.json()["user_id"] == str(existing_user.id)
+    assert response.status_code in (302, 307)
+    params = _parse_callback_redirect(response)
+    assert params["user_id"] == str(existing_user.id)
 
     db_session.refresh(existing_user)
     assert existing_user.status == UserStatus.ACTIVE

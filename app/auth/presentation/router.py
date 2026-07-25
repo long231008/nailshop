@@ -35,6 +35,7 @@ from app.auth.presentation.schemas import (
     VerifyOtpResponse,
 )
 from app.shared.infrastructure.cache.redis_client import get_redis
+from app.shared.infrastructure.config.settings import settings
 from app.shared.infrastructure.database.session import get_db
 from app.shared.infrastructure.rate_limit import limiter
 
@@ -128,13 +129,13 @@ def google_login(redis_client: Redis = Depends(get_redis)) -> RedirectResponse:
     return RedirectResponse(build_authorization_url(state))
 
 
-@router.get("/google/callback", response_model=VerifyOtpResponse)
+@router.get("/google/callback")
 def google_callback(
     code: str,
     state: str,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
-) -> VerifyOtpResponse:
+) -> RedirectResponse:
     state_key = f"oauth:google:state:{state}"
     if redis_client.get(state_key) is None:
         raise HTTPException(
@@ -165,9 +166,7 @@ def google_callback(
             detail="Google account has no verified email",
         )
 
-    return VerifyOtpResponse(
-        access_token=result.access_token,
-        token_type=result.token_type,
-        user_id=result.user_id,
-        role=result.role.value,
+    return RedirectResponse(
+        f"{settings.FRONTEND_URL}/auth/callback"
+        f"#token={result.access_token}&user_id={result.user_id}&role={result.role.value}"
     )
