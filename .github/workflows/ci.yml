@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/nailshop
+  JWT_SECRET_KEY: ci-test-secret-key
+  CLOUDINARY_CLOUD_NAME: ci-test
+  CLOUDINARY_API_KEY: ci-test-key
+  CLOUDINARY_API_SECRET: ci-test-secret
+  GOOGLE_OAUTH_CLIENT_ID: ci-test.apps.googleusercontent.com
+  GOOGLE_OAUTH_CLIENT_SECRET: ci-test-secret
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nailshop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Run tests
+        run: pytest app/tests/ -q
