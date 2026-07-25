@@ -1,0 +1,19 @@
+# Requires an ingress controller (e.g. ingress-nginx) installed in the cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nailshop-api
+  namespace: nailshop
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: nailshop.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nailshop-api
+                port:
+                  number: 8000

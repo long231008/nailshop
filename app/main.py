@@ -79,6 +79,12 @@ app.add_middleware(
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
+
+@app.get("/health")
+def health_check() -> dict:
+    return {"status": "ok"}
+
+
 app.include_router(auth_router, prefix="/app")
 app.include_router(branches_router, prefix="/app")
 app.include_router(services_router, prefix="/app")

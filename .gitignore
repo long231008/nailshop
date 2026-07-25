@@ -29,3 +29,6 @@ Thumbs.db             # Windows tự sinh
 # ===== Database local =====
 *.db
 *.sqlite3
+
+# ===== Kubernetes secrets (real values, not the .example template) =====
+k8s/secret.yaml
