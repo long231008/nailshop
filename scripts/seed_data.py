@@ -169,7 +169,7 @@ BRANCHES = [
     {
         "name": "XINH STUDIO",
         "address": "Unit 1, Town Hall Square, Cowbridge, CF71 7DD",
-        "phone_number": None,
+        "phone_number": "07412856241",
         "services": XINH_STUDIO_SERVICES,
         "staff_names": ["Linh"],
     },
