@@ -30,6 +30,9 @@ from app.staff.infrastructure.models import StaffModel, StaffStatus
 logger = logging.getLogger(__name__)
 
 DAILY_LIMIT_MINUTES = 120
+# Custom designs are nail art: their quote may only ever be spent on a nail art
+# service, never on an unrelated (and more expensive) treatment.
+NAIL_ART_CATEGORY = "addon"
 # Kept in step with app.availability.application.slot_finder so a slot that was
 # offered is a slot that can actually be booked.
 BUFFER_MINUTES = 15
@@ -186,6 +189,10 @@ def create_booking(
             design = db.get(CustomDesignModel, item.custom_design_id)
             if design is None or design.customer_id != customer_id:
                 raise InvalidBookingItemsError("Custom design not found")
+            if service.category != NAIL_ART_CATEGORY:
+                raise InvalidBookingItemsError(
+                    "A custom design can only be booked as a nail art service"
+                )
             if design.status != CustomDesignStatus.PRICED:
                 raise InvalidBookingItemsError(
                     "This design has no accepted quote or is already booked"

@@ -40,4 +40,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # Browsers ignore HSTS on plain HTTP, so this is safe in local dev and
+        # takes effect the moment the API is served over TLS.
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        # This API serves JSON and uploaded images - never HTML - so lock the
+        # document down entirely.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; img-src 'self' data:; frame-ancestors 'none'"
+        )
         return response

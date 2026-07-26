@@ -54,6 +54,7 @@ def test_full_accept_flow_creates_booking_with_design_price(
     admin_headers,
     customer_headers,
     seeded_branch,
+    seeded_addon_service,
     seeded_service,
     seeded_staff,
     seeded_shift,
@@ -69,11 +70,24 @@ def test_full_accept_flow_creates_booking_with_design_price(
         headers=admin_headers,
     )
 
-    response = client.post(
+    # The quote buys nail art and nothing else: pointing it at a manicure fails.
+    misuse = client.post(
         f"/app/custom-designs/{design['id']}/accept",
         json={
             "branch_id": str(seeded_branch),
             "service_id": str(seeded_service),
+            "staff_id": str(seeded_staff["staff_id"]),
+            "start_time": seeded_shift["start"].isoformat(),
+        },
+        headers=customer_headers,
+    )
+    assert misuse.status_code == 400
+
+    response = client.post(
+        f"/app/custom-designs/{design['id']}/accept",
+        json={
+            "branch_id": str(seeded_branch),
+            "service_id": str(seeded_addon_service),
             "staff_id": str(seeded_staff["staff_id"]),
             "start_time": seeded_shift["start"].isoformat(),
         },

@@ -1,9 +1,24 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.bookings.application.exceptions import (
+    DailyBookingLimitExceededError,
+    InvalidBookingItemsError,
+    StaffConflictError,
+)
 from app.custom_designs.application.decide import accept_custom_design, reject_custom_design
 from app.custom_designs.application.exceptions import (
     CustomDesignAlreadyDecidedError,
@@ -12,7 +27,7 @@ from app.custom_designs.application.exceptions import (
     CustomDesignNotPricedError,
 )
 from app.custom_designs.application.price import set_estimated_price
-from app.custom_designs.infrastructure.models import CustomDesignModel
+from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 from app.custom_designs.infrastructure.storage import CloudinaryStorage, get_design_storage
 from app.custom_designs.presentation.schemas import (
     AcceptCustomDesignRequest,
@@ -24,6 +39,7 @@ from app.notification.application.notify import notify_design_priced
 from app.notification.domain.sender import NotificationSender
 from app.notification.infrastructure.senders import get_notification_sender
 from app.shared.infrastructure.database.session import get_db
+from app.shared.infrastructure.rate_limit import limiter
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.staff.infrastructure.models import StaffModel
 
@@ -55,10 +71,15 @@ def _authorize_price_setter(db: Session, current_user: CurrentUser) -> None:
 
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic"}
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+# A design request is cheap for us and free for the sender, so cap the flow.
+MAX_OPEN_REQUESTS_PER_CUSTOMER = 10
 
 
 @router.post("", response_model=CustomDesignResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/hour")
 def create_custom_design(
+    request: Request,
     file: UploadFile | None = File(default=None),
     description: str | None = Form(default=None),
     db: Session = Depends(get_db),
@@ -72,6 +93,20 @@ def create_custom_design(
             detail="Please attach a photo or describe the design you want",
         )
 
+    open_requests = (
+        db.query(CustomDesignModel)
+        .filter(
+            CustomDesignModel.customer_id == current_user.id,
+            CustomDesignModel.status.in_([CustomDesignStatus.PENDING, CustomDesignStatus.PRICED]),
+        )
+        .count()
+    )
+    if open_requests >= MAX_OPEN_REQUESTS_PER_CUSTOMER:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="You already have several design requests open. Please use or decline them first.",
+        )
+
     image_url = None
     if file is not None:
         # The declared type is client-controlled, so this is a first gate only;
@@ -81,6 +116,11 @@ def create_custom_design(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Only image uploads (JPEG, PNG, WebP, GIF, HEIC) are accepted",
+            )
+        if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Images must be under {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
             )
         image_url = storage.save(file)
 
@@ -169,6 +209,13 @@ def accept_custom_design_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This design must be priced before it can be accepted",
+        )
+    except InvalidBookingItemsError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except (StaffConflictError, DailyBookingLimitExceededError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That time is no longer available",
         )
 
     return AcceptCustomDesignResponse(

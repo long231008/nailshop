@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.bookings.application.create import create_booking
-from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
+from app.bookings.infrastructure.models import BookingModel
 from app.bookings.presentation.schemas import BookingCreateRequest, BookingItemRequest
 from app.custom_designs.application.exceptions import (
     CustomDesignAlreadyDecidedError,
@@ -37,25 +37,22 @@ def accept_custom_design(
     if design.status != CustomDesignStatus.PRICED:
         raise CustomDesignNotPricedError()
 
+    # The design rides through the normal booking path, which owns the pricing
+    # rules: the quote applies to a nail art service and to nothing else.
     booking_request = BookingCreateRequest(
         branch_id=branch_id,
-        items=[BookingItemRequest(service_id=service_id, staff_id=staff_id, start_time=start_time)],
+        items=[
+            BookingItemRequest(
+                service_id=service_id,
+                staff_id=staff_id,
+                start_time=start_time,
+                custom_design_id=design.id,
+            )
+        ],
     )
     booking, gift_message = create_booking(db, customer_id, booking_request)
 
-    detail = (
-        db.query(BookingDetailModel).filter(BookingDetailModel.booking_id == booking.id).first()
-    )
-    detail.price = float(design.estimated_price)
-    detail.custom_design_id = design.id
-    booking.total_price = float(design.estimated_price)
-
-    design.status = CustomDesignStatus.ACCEPTED
-
-    db.commit()
-    db.refresh(booking)
     db.refresh(design)
-
     return booking, design, gift_message
 
 

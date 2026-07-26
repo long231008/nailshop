@@ -139,6 +139,22 @@ def seeded_service(db_session, cleanup_records):
 
 
 @pytest.fixture
+def seeded_addon_service(db_session, cleanup_records, seeded_branch):
+    """A nail art service - the only kind a custom design may be booked as."""
+    service = ServiceModel(
+        branch_id=seeded_branch,
+        name="Nail Art",
+        category="addon",
+        duration_min=30,
+        base_price=5.0,
+    )
+    db_session.add(service)
+    db_session.commit()
+    cleanup_records.append(("services", service.id))
+    return service.id
+
+
+@pytest.fixture
 def seeded_staff(db_session, cleanup_records, seeded_branch):
     user = UserModel(
         phone_number=f"09{uuid.uuid4().int % 10**8:08d}",

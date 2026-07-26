@@ -153,7 +153,7 @@ def test_cart_books_priced_design_at_quoted_price(
     customer_identity,
     db_session,
     seeded_branch,
-    seeded_service,
+    seeded_addon_service,
     seeded_staff,
     seeded_shift,
     cleanup_records,
@@ -175,7 +175,7 @@ def test_cart_books_priced_design_at_quoted_price(
         "branch_id": str(seeded_branch),
         "items": [
             {
-                "service_id": str(seeded_service),
+                "service_id": str(seeded_addon_service),
                 "staff_id": str(seeded_staff["staff_id"]),
                 "start_time": seeded_shift["start"].isoformat(),
                 "custom_design_id": str(design.id),
@@ -199,7 +199,7 @@ def test_cart_books_priced_design_at_quoted_price(
         "branch_id": str(seeded_branch),
         "items": [
             {
-                "service_id": str(seeded_service),
+                "service_id": str(seeded_addon_service),
                 "staff_id": str(seeded_staff["staff_id"]),
                 "start_time": (seeded_shift["start"].replace(hour=13)).isoformat(),
                 "custom_design_id": str(design.id),
@@ -216,7 +216,7 @@ def test_cancelling_design_booking_releases_the_design(
     customer_identity,
     db_session,
     seeded_branch,
-    seeded_service,
+    seeded_addon_service,
     seeded_staff,
     seeded_shift,
     cleanup_records,
@@ -239,7 +239,7 @@ def test_cancelling_design_booking_releases_the_design(
             "branch_id": str(seeded_branch),
             "items": [
                 {
-                    "service_id": str(seeded_service),
+                    "service_id": str(seeded_addon_service),
                     "staff_id": str(seeded_staff["staff_id"]),
                     "start_time": seeded_shift["start"].isoformat(),
                     "custom_design_id": str(design.id),

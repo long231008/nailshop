@@ -314,7 +314,7 @@ def test_schedule_carries_the_nail_design(
     customer_identity,
     db_session,
     seeded_branch,
-    seeded_service,
+    seeded_addon_service,
     seeded_staff,
     seeded_shift,
     cleanup_records,
@@ -338,7 +338,7 @@ def test_schedule_carries_the_nail_design(
             "branch_id": str(seeded_branch),
             "items": [
                 {
-                    "service_id": str(seeded_service),
+                    "service_id": str(seeded_addon_service),
                     "staff_id": str(seeded_staff["staff_id"]),
                     "start_time": seeded_shift["start"].isoformat(),
                     "custom_design_id": str(design.id),

@@ -180,6 +180,67 @@ def test_cancelled_booking_cannot_be_completed_manually(
     assert response.status_code == 400
 
 
+def test_design_quote_cannot_underprice_another_service(
+    client,
+    customer_headers,
+    customer_identity,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """A £3 nail art quote must not buy a £20 manicure."""
+    from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
+
+    design = CustomDesignModel(
+        customer_id=customer_identity["id"],
+        description="cheap art",
+        estimated_price=3.0,
+        status=CustomDesignStatus.PRICED,
+    )
+    db_session.add(design)
+    db_session.commit()
+    cleanup_records.append(("custom_designs", design.id))
+
+    response = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    # seeded_service is a manicure, not nail art.
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                    "custom_design_id": str(design.id),
+                }
+            ],
+        },
+        headers=customer_headers,
+    )
+
+    assert response.status_code == 400
+    db_session.refresh(design)
+    assert design.status == CustomDesignStatus.PRICED
+
+
+def test_oversized_design_upload_is_rejected(client, customer_headers):
+    import io
+
+    from app.custom_designs.presentation.routers import MAX_UPLOAD_BYTES
+
+    oversized = io.BytesIO(b"\x00" * (MAX_UPLOAD_BYTES + 1024))
+    response = client.post(
+        "/app/custom-designs",
+        headers=customer_headers,
+        files={"file": ("huge.png", oversized, "image/png")},
+    )
+
+    assert response.status_code == 413
+
+
 # --- Payment webhook -----------------------------------------------------------
 
 
