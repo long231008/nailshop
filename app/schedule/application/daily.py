@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.infrastructure.models import UserModel
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.services.infrastructure.models import ServiceModel
-from app.shared.infrastructure.clock import day_bounds_utc
+from app.shared.infrastructure.clock import day_bounds_utc, now_utc
 from app.staff.infrastructure.models import StaffModel
 from app.webhooks.infrastructure.models import (
     PaymentTransactionModel,
@@ -94,3 +94,54 @@ def get_daily_schedule(
             pending.append({**item, "stage": "awaiting_approval"})
 
     return appointments, pending
+
+
+def get_upcoming_pending(db: Session, branch_id: UUID | None) -> list[dict]:
+    """Every future booking still needing a human, however far ahead it is.
+
+    A request made months out must not hide behind day-by-day navigation, so
+    this list spans all dates: bookings awaiting a grant, and granted ones whose
+    deposit has not arrived yet.
+    """
+    query = (
+        db.query(BookingDetailModel, BookingModel, ServiceModel.name, StaffModel, UserModel)
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+        .outerjoin(StaffModel, BookingDetailModel.staff_id == StaffModel.id)
+        .join(UserModel, BookingModel.customer_id == UserModel.id)
+        .filter(
+            BookingModel.status.in_([BookingStatus.PENDING, BookingStatus.APPROVED]),
+            BookingDetailModel.start_time >= now_utc(),
+        )
+    )
+    if branch_id is not None:
+        query = query.filter(BookingModel.branch_id == branch_id)
+
+    rows = query.order_by(BookingDetailModel.start_time).all()
+    paid_ids = _paid_deposit_booking_ids(db, list({booking.id for _, booking, *_ in rows}))
+
+    pending: list[dict] = []
+    for detail, booking, service_name, staff, customer in rows:
+        if booking.status == BookingStatus.APPROVED and booking.id in paid_ids:
+            continue  # secured - it lives on the grid, not here
+        customer_name = " ".join(part for part in (customer.first_name, customer.surname) if part)
+        pending.append(
+            {
+                "booking_id": booking.id,
+                "branch_id": booking.branch_id,
+                "start_time": detail.start_time,
+                "end_time": detail.end_time,
+                "service_name": service_name,
+                "staff_name": staff.display_name if staff else None,
+                "customer_name": customer_name or None,
+                "customer_phone": customer.phone_number,
+                "price": float(detail.price),
+                "status": booking.status.value,
+                "stage": (
+                    "awaiting_deposit"
+                    if booking.status == BookingStatus.APPROVED
+                    else "awaiting_approval"
+                ),
+            }
+        )
+    return pending

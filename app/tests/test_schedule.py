@@ -235,6 +235,76 @@ def test_staff_can_view_any_branch_schedule(
     assert len(everything) >= 1
 
 
+def test_upcoming_pending_spans_all_dates(
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    from datetime import timedelta
+
+    near = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", near["id"]))
+    cleanup_records.append(("booking_details", near["details"][0]["id"]))
+
+    far_start = seeded_shift["start"] + timedelta(days=150)
+    if far_start.weekday() == 6:
+        far_start += timedelta(days=1)
+    far = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": far_start.isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", far["id"]))
+    cleanup_records.append(("booking_details", far["details"][0]["id"]))
+
+    listing = client.get(
+        "/app/schedule/pending",
+        params={"branch_id": str(seeded_branch)},
+        headers=admin_headers,
+    )
+    assert listing.status_code == 200
+    stages = {p["booking_id"]: p["stage"] for p in listing.json()}
+    assert stages[near["id"]] == "awaiting_approval"
+    assert stages[far["id"]] == "awaiting_approval"
+
+    # Granting the far one moves it to awaiting_deposit but keeps it visible.
+    client.post(f"/app/bookings/{far['id']}/approve", headers=admin_headers)
+    listing = client.get(
+        "/app/schedule/pending",
+        params={"branch_id": str(seeded_branch)},
+        headers=admin_headers,
+    ).json()
+    stages = {p["booking_id"]: p["stage"] for p in listing}
+    assert stages[far["id"]] == "awaiting_deposit"
+
+
 def test_schedule_rejects_customers(client, customer_headers, seeded_shift):
     response = client.get(
         "/app/schedule",

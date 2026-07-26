@@ -2,7 +2,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from redis import Redis
 from sqlalchemy.orm import Session
 
+from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
+from app.notification.application.notify import notify_booking_confirmed, notify_deposit_failed
+from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.senders import get_notification_sender
 from app.shared.infrastructure.cache.redis_client import get_redis
+from app.shared.infrastructure.clock import shop_timezone
 from app.shared.infrastructure.database.session import get_db
 from app.webhooks.application.payment import (
     AmountMismatchError,
@@ -17,12 +22,43 @@ from app.webhooks.presentation.schemas import PaymentWebhookPayload
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
+def _notify_deposit_outcome(
+    db: Session, sender: NotificationSender, booking_id, confirmed: bool
+) -> None:
+    """Tell the customer on their own channel how their deposit went."""
+    booking = db.get(BookingModel, booking_id)
+    if booking is None:
+        return
+    if not confirmed:
+        notify_deposit_failed(sender, db, booking.customer_id)
+        return
+
+    first_start = (
+        db.query(BookingDetailModel.start_time)
+        .filter(BookingDetailModel.booking_id == booking_id)
+        .order_by(BookingDetailModel.start_time)
+        .limit(1)
+        .scalar()
+    )
+    local_start = first_start.astimezone(shop_timezone()) if first_start else None
+    notify_booking_confirmed(
+        sender,
+        db,
+        booking.customer_id,
+        booking_date=local_start.strftime("%A %d %B %Y")
+        if local_start
+        else str(booking.booking_date),
+        start_time=local_start.strftime("%H:%M") if local_start else "",
+    )
+
+
 @router.post("/payment", status_code=status.HTTP_200_OK)
 async def payment_webhook(
     request: Request,
     x_signature: str = Header(...),
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> dict:
     raw_body = await request.body()
 
@@ -52,13 +88,20 @@ async def payment_webhook(
     except BookingNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     except AmountMismatchError:
+        # The provider took no money for us; the customer needs to try again.
+        if transaction_type == PaymentTransactionType.DEPOSIT:
+            _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=False)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payment amount does not match the amount due",
         )
 
-    if counts_as_paid and transaction_type == PaymentTransactionType.DEPOSIT:
-        redis_client.delete(f"booking:soft_lock:{payload.booking_id}")
+    if transaction_type == PaymentTransactionType.DEPOSIT:
+        if counts_as_paid:
+            redis_client.delete(f"booking:soft_lock:{payload.booking_id}")
+            _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=True)
+        elif payload.status == "failed":
+            _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=False)
 
     return {
         "status": "ok",

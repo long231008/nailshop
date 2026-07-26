@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
-from app.schedule.application.daily import get_daily_schedule
+from app.schedule.application.daily import get_daily_schedule, get_upcoming_pending
 from app.schedule.presentation.schemas import (
     DailyAppointment,
     DailyScheduleResponse,
@@ -36,3 +36,13 @@ def daily_schedule(
         appointments=[DailyAppointment(**a) for a in appointments],
         pending=[PendingAppointment(**p) for p in pending],
     )
+
+
+@router.get("/pending", response_model=list[PendingAppointment])
+def upcoming_pending(
+    branch_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.STAFF)),
+) -> list[PendingAppointment]:
+    """All future booking requests needing action, across every date."""
+    return [PendingAppointment(**p) for p in get_upcoming_pending(db, branch_id)]

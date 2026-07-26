@@ -41,6 +41,33 @@ def deposit_request_notification(
     )
 
 
+def booking_confirmed_notification(
+    phone_number: str | None, email: str | None, booking_date: str, start_time: str
+) -> Notification:
+    return Notification(
+        subject="Your booking is confirmed",
+        body=(
+            f"Thank you - your deposit has been received and your appointment on "
+            f"{booking_date} at {start_time} is confirmed. We look forward to seeing you!"
+        ),
+        phone_number=phone_number,
+        email=email,
+    )
+
+
+def deposit_failed_notification(phone_number: str | None, email: str | None) -> Notification:
+    return Notification(
+        subject="Your deposit payment failed",
+        body=(
+            "Unfortunately your deposit payment did not go through, so your booking "
+            "is not confirmed yet. Please try paying again from your account page, "
+            "or contact the salon if the problem continues."
+        ),
+        phone_number=phone_number,
+        email=email,
+    )
+
+
 def booking_cancelled_notification(phone_number: str | None, email: str | None) -> Notification:
     return Notification(
         subject="Your booking was released",

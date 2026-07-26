@@ -62,3 +62,31 @@ def notify_booking_cancelled(sender: NotificationSender, db: Session, customer_i
     if customer is None:
         return
     _send(sender, messages.booking_cancelled_notification(customer.phone_number, customer.email))
+
+
+def notify_booking_confirmed(
+    sender: NotificationSender,
+    db: Session,
+    customer_id: UUID,
+    booking_date: str,
+    start_time: str,
+) -> None:
+    """Sent on the channel the customer signed up with: their phone number when
+    they registered by phone, their email when they came via email, Google or
+    Facebook."""
+    customer = db.get(UserModel, customer_id)
+    if customer is None:
+        return
+    _send(
+        sender,
+        messages.booking_confirmed_notification(
+            customer.phone_number, customer.email, booking_date, start_time
+        ),
+    )
+
+
+def notify_deposit_failed(sender: NotificationSender, db: Session, customer_id: UUID) -> None:
+    customer = db.get(UserModel, customer_id)
+    if customer is None:
+        return
+    _send(sender, messages.deposit_failed_notification(customer.phone_number, customer.email))
