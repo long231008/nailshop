@@ -40,7 +40,9 @@ class FakeDesignStorage:
 def client(fake_redis):
     app.dependency_overrides[get_redis] = lambda: fake_redis
     app.dependency_overrides[get_design_storage] = lambda: FakeDesignStorage()
-    with TestClient(app) as test_client:
+    # ALLOWED_HOSTS no longer defaults to "*", so requests must come from a host
+    # the app actually serves - the same rule production runs under.
+    with TestClient(app, base_url="http://localhost") as test_client:
         yield test_client
     app.dependency_overrides.clear()
 

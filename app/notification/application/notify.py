@@ -92,6 +92,12 @@ def notify_deposit_failed(sender: NotificationSender, db: Session, customer_id: 
     _send(sender, messages.deposit_failed_notification(customer.phone_number, customer.email))
 
 
+def notify_email_change(
+    sender: NotificationSender, email: str, code: str, ttl_seconds: int
+) -> None:
+    _send(sender, messages.email_change_notification(email, code, ttl_seconds))
+
+
 def notify_design_priced(
     sender: NotificationSender, db: Session, customer_id: UUID, price: float
 ) -> None:

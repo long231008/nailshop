@@ -49,6 +49,20 @@ class OtpRepository(ABC):
     def is_resend_blocked(self, pending_id: UUID) -> bool:
         raise NotImplementedError
 
+    @abstractmethod
+    def save_email_change(self, user_id: UUID, email: str, code: str, ttl_seconds: int) -> None:
+        """Hold a pending email change until its code is confirmed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_email_change(self, user_id: UUID) -> tuple[str, str] | None:
+        """(email, code) of the pending change, if any."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_email_change(self, user_id: UUID) -> None:
+        raise NotImplementedError
+
 
 class TokenProvider(ABC):
     @abstractmethod

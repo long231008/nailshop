@@ -17,9 +17,20 @@ class MyProfileResponse(BaseModel):
 
 class MyProfileUpdateRequest(BaseModel):
     phone_number: str | None = Field(default=None, pattern=r"^\+?[0-9]{6,15}$")
-    email: EmailStr | None = None
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     surname: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class EmailChangeRequest(BaseModel):
+    email: EmailStr
+
+
+class EmailChangeStarted(BaseModel):
+    expires_in_seconds: int
+
+
+class EmailChangeConfirmRequest(BaseModel):
+    code: str = Field(pattern=r"^\d{6}$", examples=["123456"])
 
 
 class MyBookingSummary(BaseModel):

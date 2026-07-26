@@ -68,6 +68,19 @@ def deposit_failed_notification(phone_number: str | None, email: str | None) -> 
     )
 
 
+def email_change_notification(email: str, code: str, ttl_seconds: int) -> Notification:
+    minutes = max(1, ttl_seconds // 60)
+    return Notification(
+        subject="Confirm your new email address",
+        body=(
+            f"Use code {code} to confirm this email address on your nailshop account. "
+            f"It expires in {minutes} minutes. If you did not request this, ignore this message."
+        ),
+        # Deliberately sent to the NEW address: that is what proves ownership.
+        email=email,
+    )
+
+
 def design_priced_notification(
     phone_number: str | None, email: str | None, price: float
 ) -> Notification:

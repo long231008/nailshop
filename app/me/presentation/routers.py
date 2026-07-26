@@ -1,19 +1,35 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from redis import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
 from app.auth.infrastructure.models import UserModel
+from app.auth.infrastructure.otp_repository_impl import RedisOtpRepository
 from app.me.application.bookings import bookings_awaiting_deposit, list_my_bookings
 from app.me.application.custom_designs import list_my_custom_designs
+from app.me.application.email_change import (
+    EmailAlreadyUsedError,
+    InvalidEmailCodeError,
+    NoPendingEmailChangeError,
+    confirm_email_change,
+    request_email_change,
+)
 from app.me.presentation.schemas import (
+    EmailChangeConfirmRequest,
+    EmailChangeRequest,
+    EmailChangeStarted,
     MyBookingSummary,
     MyCustomDesignSummary,
     MyProfileResponse,
     MyProfileUpdateRequest,
 )
+from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.senders import get_notification_sender
+from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.config.settings import settings
 from app.shared.infrastructure.database.session import get_db
+from app.shared.infrastructure.rate_limit import limiter
 from app.shared.presentation.dependencies import CurrentUser, get_current_user, require_roles
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -50,6 +66,8 @@ def update_my_profile(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    # Email is not editable here: it is proof of identity for Google/Facebook
+    # sign-in, so it goes through the verified change flow below.
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
 
@@ -59,9 +77,77 @@ def update_my_profile(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This phone number or email is already in use",
+            detail="This phone number is already in use",
         )
     db.refresh(user)
+
+    return MyProfileResponse(
+        id=user.id,
+        phone_number=user.phone_number,
+        email=user.email,
+        first_name=user.first_name,
+        surname=user.surname,
+        role=user.role.value,
+        status=user.status.value,
+        created_at=user.created_at,
+    )
+
+
+@router.post("/email", response_model=EmailChangeStarted)
+@limiter.limit("5/hour")
+def request_email_change_endpoint(
+    request: Request,
+    payload: EmailChangeRequest,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+    current_user: CurrentUser = Depends(get_current_user),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
+) -> EmailChangeStarted:
+    """Send a confirmation code to the new address; nothing changes until it comes back."""
+    try:
+        ttl = request_email_change(
+            db,
+            RedisOtpRepository(redis_client),
+            notification_sender,
+            current_user.id,
+            payload.email,
+        )
+    except EmailAlreadyUsedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email address is already in use",
+        )
+
+    return EmailChangeStarted(expires_in_seconds=ttl)
+
+
+@router.post("/email/confirm", response_model=MyProfileResponse)
+@limiter.limit("10/hour")
+def confirm_email_change_endpoint(
+    request: Request,
+    payload: EmailChangeConfirmRequest,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> MyProfileResponse:
+    try:
+        user = confirm_email_change(
+            db, RedisOtpRepository(redis_client), current_user.id, payload.code
+        )
+    except NoPendingEmailChangeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No email change is pending, or it has expired",
+        )
+    except InvalidEmailCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confirmation code"
+        )
+    except EmailAlreadyUsedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email address is already in use",
+        )
 
     return MyProfileResponse(
         id=user.id,

@@ -41,3 +41,20 @@ class RedisOtpRepository(OtpRepository):
 
     def is_resend_blocked(self, pending_id: UUID) -> bool:
         return self._redis.exists(self._cooldown_key(pending_id)) > 0
+
+    def _email_change_key(self, user_id: UUID) -> str:
+        return f"email_change:{user_id}"
+
+    def save_email_change(self, user_id: UUID, email: str, code: str, ttl_seconds: int) -> None:
+        # The address only reaches the user row once the code comes back.
+        self._redis.hset(self._email_change_key(user_id), mapping={"email": email, "code": code})
+        self._redis.expire(self._email_change_key(user_id), ttl_seconds)
+
+    def get_email_change(self, user_id: UUID) -> tuple[str, str] | None:
+        data = self._redis.hgetall(self._email_change_key(user_id))
+        if not data or "email" not in data or "code" not in data:
+            return None
+        return data["email"], data["code"]
+
+    def delete_email_change(self, user_id: UUID) -> None:
+        self._redis.delete(self._email_change_key(user_id))

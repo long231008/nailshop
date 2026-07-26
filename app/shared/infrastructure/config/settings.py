@@ -22,8 +22,11 @@ class Settings(BaseSettings):
     FACEBOOK_APP_SECRET: str = ""
     FACEBOOK_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/facebook/callback"
     FRONTEND_URL: str = "http://localhost:5173"
-    CORS_ALLOWED_ORIGINS: str = "*"
-    ALLOWED_HOSTS: str = "*"
+    # Which websites may call this API from a browser, and which Host headers
+    # this API answers to. Defaults cover local development only - production
+    # must name its real domains, never "*".
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+    ALLOWED_HOSTS: str = "localhost,127.0.0.1"
     # Business timezone. Opening hours, "today" and daily counters are computed in this
     # zone, not UTC, so a UK summer day still starts at 00:00 local time.
     SHOP_TIMEZONE: str = "Europe/London"
@@ -50,13 +53,28 @@ class Settings(BaseSettings):
     def cors_allowed_origins_list(self) -> list[str]:
         if self.CORS_ALLOWED_ORIGINS == "*":
             return ["*"]
-        return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",")]
+        return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     @property
     def allowed_hosts_list(self) -> list[str]:
         if self.ALLOWED_HOSTS == "*":
             return ["*"]
-        return [host.strip() for host in self.ALLOWED_HOSTS.split(",")]
+        # Health checks and load balancers often probe by IP or without a Host.
+        return [host.strip() for host in self.ALLOWED_HOSTS.split(",") if host.strip()]
+
+    @property
+    def insecure_wildcards(self) -> list[str]:
+        """Settings that are fine locally but must never ship to production."""
+        problems = []
+        if self.CORS_ALLOWED_ORIGINS == "*":
+            problems.append("CORS_ALLOWED_ORIGINS=*")
+        if self.ALLOWED_HOSTS == "*":
+            problems.append("ALLOWED_HOSTS=*")
+        if self.NOTIFICATION_BACKEND == "console":
+            problems.append("NOTIFICATION_BACKEND=console (OTP codes go to the log)")
+        if len(self.JWT_SECRET_KEY) < 32:
+            problems.append("JWT_SECRET_KEY is shorter than 32 characters")
+        return problems
 
 
 settings = Settings()

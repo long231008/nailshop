@@ -64,6 +64,10 @@ def _run_expire_soft_locks_job() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Say it loudly at boot rather than discovering it after an incident.
+    for problem in settings.insecure_wildcards:
+        logging.getLogger("app.startup").warning("INSECURE FOR PRODUCTION: %s", problem)
+
     scheduler.add_job(
         _run_expire_soft_locks_job,
         "interval",
