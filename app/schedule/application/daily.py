@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.infrastructure.models import UserModel
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
+from app.custom_designs.infrastructure.models import CustomDesignModel
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc, now_utc
 from app.staff.infrastructure.models import StaffModel
@@ -50,11 +51,19 @@ def get_daily_schedule(
     day_start, day_end = day_bounds_utc(target_date)
 
     query = (
-        db.query(BookingDetailModel, BookingModel, ServiceModel.name, StaffModel, UserModel)
+        db.query(
+            BookingDetailModel,
+            BookingModel,
+            ServiceModel.name,
+            StaffModel,
+            UserModel,
+            CustomDesignModel,
+        )
         .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
         .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
         .outerjoin(StaffModel, BookingDetailModel.staff_id == StaffModel.id)
         .join(UserModel, BookingModel.customer_id == UserModel.id)
+        .outerjoin(CustomDesignModel, BookingDetailModel.custom_design_id == CustomDesignModel.id)
         .filter(
             BookingModel.status.in_(VISIBLE_STATUSES),
             BookingDetailModel.start_time >= day_start,
@@ -69,7 +78,7 @@ def get_daily_schedule(
 
     appointments: list[dict] = []
     pending: list[dict] = []
-    for detail, booking, service_name, staff, customer in rows:
+    for detail, booking, service_name, staff, customer, design in rows:
         customer_name = " ".join(part for part in (customer.first_name, customer.surname) if part)
         item = {
             "booking_id": booking.id,
@@ -82,6 +91,9 @@ def get_daily_schedule(
             "customer_phone": customer.phone_number,
             "price": float(detail.price),
             "status": booking.status.value,
+            # The customer's nail art, so staff can see what they'll be doing.
+            "design_image_url": design.image_url if design else None,
+            "design_description": design.description if design else None,
         }
 
         if booking.status in (BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED) or (
@@ -104,11 +116,19 @@ def get_upcoming_pending(db: Session, branch_id: UUID | None) -> list[dict]:
     deposit has not arrived yet.
     """
     query = (
-        db.query(BookingDetailModel, BookingModel, ServiceModel.name, StaffModel, UserModel)
+        db.query(
+            BookingDetailModel,
+            BookingModel,
+            ServiceModel.name,
+            StaffModel,
+            UserModel,
+            CustomDesignModel,
+        )
         .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
         .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
         .outerjoin(StaffModel, BookingDetailModel.staff_id == StaffModel.id)
         .join(UserModel, BookingModel.customer_id == UserModel.id)
+        .outerjoin(CustomDesignModel, BookingDetailModel.custom_design_id == CustomDesignModel.id)
         .filter(
             BookingModel.status.in_([BookingStatus.PENDING, BookingStatus.APPROVED]),
             BookingDetailModel.start_time >= now_utc(),
@@ -121,7 +141,7 @@ def get_upcoming_pending(db: Session, branch_id: UUID | None) -> list[dict]:
     paid_ids = _paid_deposit_booking_ids(db, list({booking.id for _, booking, *_ in rows}))
 
     pending: list[dict] = []
-    for detail, booking, service_name, staff, customer in rows:
+    for detail, booking, service_name, staff, customer, design in rows:
         if booking.status == BookingStatus.APPROVED and booking.id in paid_ids:
             continue  # secured - it lives on the grid, not here
         customer_name = " ".join(part for part in (customer.first_name, customer.surname) if part)
@@ -137,6 +157,8 @@ def get_upcoming_pending(db: Session, branch_id: UUID | None) -> list[dict]:
                 "customer_phone": customer.phone_number,
                 "price": float(detail.price),
                 "status": booking.status.value,
+                "design_image_url": design.image_url if design else None,
+                "design_description": design.description if design else None,
                 "stage": (
                     "awaiting_deposit"
                     if booking.status == BookingStatus.APPROVED

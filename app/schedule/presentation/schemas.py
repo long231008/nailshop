@@ -15,6 +15,9 @@ class DailyAppointment(BaseModel):
     customer_phone: str | None
     price: float
     status: str
+    # Present when the appointment carries the customer's own nail art.
+    design_image_url: str | None = None
+    design_description: str | None = None
 
 
 class PendingAppointment(DailyAppointment):

@@ -307,6 +307,59 @@ def test_upcoming_pending_spans_all_dates(
     assert stages[far["id"]] == "awaiting_deposit"
 
 
+def test_schedule_carries_the_nail_design(
+    client,
+    admin_headers,
+    customer_headers,
+    customer_identity,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
+
+    design = CustomDesignModel(
+        customer_id=customer_identity["id"],
+        image_url="https://example.com/art.jpg",
+        description="Chrome french tips",
+        estimated_price=22.0,
+        status=CustomDesignStatus.PRICED,
+    )
+    db_session.add(design)
+    db_session.commit()
+    cleanup_records.append(("custom_designs", design.id))
+
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                    "custom_design_id": str(design.id),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    pending = client.get(
+        "/app/schedule/pending",
+        params={"branch_id": str(seeded_branch)},
+        headers=admin_headers,
+    ).json()
+    entry = next(p for p in pending if p["booking_id"] == booking["id"])
+    assert entry["design_image_url"] == "https://example.com/art.jpg"
+    assert entry["design_description"] == "Chrome french tips"
+
+
 def test_schedule_rejects_customers(client, customer_headers, seeded_shift):
     response = client.get(
         "/app/schedule",
