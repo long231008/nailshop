@@ -84,7 +84,7 @@ def test_booking_in_the_past_is_rejected(
     assert response.status_code == 400
 
 
-def test_booking_outside_staff_shift_is_rejected(
+def test_booking_outside_opening_hours_is_rejected(
     client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift
 ):
     after_hours = seeded_shift["end"] + timedelta(hours=1)
@@ -92,7 +92,7 @@ def test_booking_outside_staff_shift_is_rejected(
 
     response = client.post("/app/bookings", json=payload, headers=customer_headers)
 
-    assert response.status_code == 409
+    assert response.status_code == 400
 
 
 def test_booking_service_from_another_branch_is_rejected(
@@ -288,37 +288,27 @@ def test_webhook_failed_payment_is_recorded_but_not_counted(
 # --- Availability --------------------------------------------------------------
 
 
-def test_availability_never_offers_past_slots(
-    client, customer_headers, db_session, cleanup_records, seeded_staff, seeded_service
-):
+def test_availability_never_offers_past_slots(client, seeded_staff, seeded_service):
     from datetime import datetime, timezone
 
-    from app.shifts.infrastructure.models import StaffRosterModel
+    from app.shared.infrastructure.clock import shop_timezone, today_in_shop_tz
 
-    # A shift that started two hours ago and runs for another six.
     now = datetime.now(timezone.utc)
-    shift = StaffRosterModel(
-        staff_id=seeded_staff["staff_id"],
-        branch_id=seeded_staff["branch_id"],
-        start_time=now - timedelta(hours=2),
-        end_time=now + timedelta(hours=6),
-    )
-    db_session.add(shift)
-    db_session.commit()
-    cleanup_records.append(("staff_rosters", shift.id))
-
     response = client.get(
         "/app/availability",
         params={
             "branch_id": str(seeded_staff["branch_id"]),
             "service_id": str(seeded_service),
-            "date": now.date().isoformat(),
+            "date": today_in_shop_tz().isoformat(),
         },
     )
 
     assert response.status_code == 200
     slots = response.json()
-    assert slots, "expected some availability for the rest of the day"
     for slot in slots:
         start = datetime.fromisoformat(slot["start_time"])
         assert start > now
+    # Only assert there IS availability while a good chunk of the day remains -
+    # after closing time an empty list is the correct answer.
+    if now.astimezone(shop_timezone()).hour < 16:
+        assert slots, "expected some availability for the rest of the day"

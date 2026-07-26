@@ -20,6 +20,15 @@ class DesignPricingPermissionResponse(BaseModel):
     can_price_custom_designs: bool
 
 
+class SlotLockPermissionRequest(BaseModel):
+    enabled: bool
+
+
+class SlotLockPermissionResponse(BaseModel):
+    staff_id: UUID
+    can_lock_slots: bool
+
+
 class StaffCreateRequest(BaseModel):
     branch_id: UUID
     display_name: str = Field(min_length=1, max_length=255)

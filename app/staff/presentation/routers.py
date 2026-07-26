@@ -48,6 +48,7 @@ def list_staff(
             branch_id=s.branch_id,
             display_name=s.display_name,
             status=s.status.value,
+            can_lock_slots=s.can_lock_slots,
             created_at=s.created_at,
         )
         for s in staff_list

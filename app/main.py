@@ -32,6 +32,7 @@ from app.shared.presentation.middleware import (
     SecurityHeadersMiddleware,
 )
 from app.shifts.presentation.routers import router as shifts_router
+from app.slot_locks.presentation.routers import router as slot_locks_router
 from app.staff.presentation.routers import router as staff_router
 from app.webhooks.presentation.routers import router as webhooks_router
 
@@ -98,6 +99,7 @@ app.include_router(auth_router, prefix="/app")
 app.include_router(branches_router, prefix="/app")
 app.include_router(services_router, prefix="/app")
 app.include_router(shifts_router, prefix="/app")
+app.include_router(slot_locks_router, prefix="/app")
 app.include_router(discounts_router, prefix="/app")
 app.include_router(availability_router, prefix="/app")
 app.include_router(bookings_router, prefix="/app")

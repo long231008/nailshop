@@ -10,6 +10,7 @@ class StaffResponse(BaseModel):
     branch_id: UUID
     display_name: str
     status: str
+    can_lock_slots: bool
     created_at: datetime
 
 

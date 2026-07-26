@@ -47,3 +47,16 @@ def start_of_month_utc(now: datetime | None = None) -> datetime:
 
 def start_of_year_utc(now: datetime | None = None) -> datetime:
     return day_bounds_utc(today_in_shop_tz(now).replace(month=1, day=1))[0]
+
+
+def opening_window_utc(target_date: date_type) -> tuple[datetime, datetime]:
+    """The UTC instants of the shop's opening hours on one local calendar day."""
+    tz = shop_timezone()
+    open_local = datetime.combine(target_date, time(hour=settings.SHOP_OPEN_HOUR), tzinfo=tz)
+    close_local = datetime.combine(target_date, time(hour=settings.SHOP_CLOSE_HOUR), tzinfo=tz)
+    return open_local.astimezone(timezone.utc), close_local.astimezone(timezone.utc)
+
+
+def within_booking_horizon(target_date: date_type, now: datetime | None = None) -> bool:
+    today = today_in_shop_tz(now)
+    return today <= target_date <= today + timedelta(days=settings.BOOKING_HORIZON_DAYS)

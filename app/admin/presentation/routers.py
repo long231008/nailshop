@@ -16,6 +16,8 @@ from app.admin.application.staff.reserve import StaffNotFoundError, reserve_staf
 from app.admin.presentation.schemas import (
     DesignPricingPermissionRequest,
     DesignPricingPermissionResponse,
+    SlotLockPermissionRequest,
+    SlotLockPermissionResponse,
     StaffActionResponse,
     StaffCreatedResponse,
     StaffCreateRequest,
@@ -27,6 +29,7 @@ from app.auth.domain.value_object import UserRole
 from app.auth.infrastructure.models import UserModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
+from app.staff.infrastructure.models import StaffModel
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -134,6 +137,33 @@ def set_design_pricing_permission_endpoint(
     return DesignPricingPermissionResponse(
         staff_id=staff.id, can_price_custom_designs=staff.can_price_custom_designs
     )
+
+
+@router.post("/staff/{staff_id}/slot-lock-permission", response_model=SlotLockPermissionResponse)
+def set_slot_lock_permission_endpoint(
+    staff_id: UUID,
+    payload: SlotLockPermissionRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+) -> SlotLockPermissionResponse:
+    staff = db.get(StaffModel, staff_id)
+    if staff is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff not found")
+
+    staff.can_lock_slots = payload.enabled
+    db.add(
+        AuditLogModel(
+            actor_user_id=current_user.id,
+            action="staff.slot_lock_permission",
+            entity_type="staff",
+            entity_id=staff.id,
+            details={"enabled": payload.enabled},
+        )
+    )
+    db.commit()
+    db.refresh(staff)
+
+    return SlotLockPermissionResponse(staff_id=staff.id, can_lock_slots=staff.can_lock_slots)
 
 
 @router.patch("/users/{user_id}", response_model=UserAdminResponse)

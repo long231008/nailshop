@@ -31,7 +31,6 @@ from app.discounts.infrastructure.models import DiscountModel, DiscountType
 from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import SessionLocal
-from app.shifts.infrastructure.models import StaffRosterModel
 from app.staff.infrastructure.models import StaffModel
 from app.webhooks.infrastructure.models import (
     PaymentTransactionModel,
@@ -39,7 +38,6 @@ from app.webhooks.infrastructure.models import (
     PaymentTransactionType,
 )
 
-SHIFT_DAYS_AHEAD = 7
 DEPOSIT_PERCENTAGE = 0.3
 
 # name, category, description, duration_min, base_price
@@ -234,28 +232,8 @@ def _seed_branch(db, branch_data: dict):
             db.flush()
         staff_members.append(staff)
 
-    now = datetime.now(timezone.utc)
-    shift_count = 0
-    for staff in staff_members:
-        for day_offset in range(SHIFT_DAYS_AHEAD):
-            day = now + timedelta(days=day_offset)
-            start = day.replace(hour=9, minute=0, second=0, microsecond=0)
-            end = day.replace(hour=18, minute=0, second=0, microsecond=0)
-            exists = (
-                db.query(StaffRosterModel)
-                .filter_by(staff_id=staff.id, start_time=start, end_time=end)
-                .first()
-            )
-            if not exists:
-                db.add(
-                    StaffRosterModel(
-                        staff_id=staff.id, branch_id=branch.id, start_time=start, end_time=end
-                    )
-                )
-                shift_count += 1
-
     db.flush()
-    return branch, services, staff_members, shift_count
+    return branch, services, staff_members
 
 
 def _get_or_create_customer(db, phone: str) -> UserModel:
@@ -414,21 +392,19 @@ def seed() -> None:
 
     summary = []
     for branch_data in BRANCHES:
-        branch, services, staff_members, shift_count = _seed_branch(db, branch_data)
+        branch, services, staff_members = _seed_branch(db, branch_data)
         booking_count, payment_count = _seed_branch_activity(
             db, branch, services, staff_members, customers
         )
-        summary.append(
-            (branch.name, branch.id, len(services), len(staff_members), shift_count, booking_count)
-        )
+        summary.append((branch.name, branch.id, len(services), len(staff_members), booking_count))
 
     db.commit()
     db.close()
 
-    for name, branch_id, service_count, staff_count, shift_count, booking_count in summary:
+    for name, branch_id, service_count, staff_count, booking_count in summary:
         print(
             f"{name} ({branch_id}): {service_count} services, {staff_count} staff, "
-            f"{shift_count} new shifts, {booking_count} bookings"
+            f"{booking_count} bookings"
         )
     print(f"Customers: {len(customers)}")
     print("Custom designs: 2 (1 priced, 1 pending)")

@@ -35,6 +35,9 @@ class StaffModel(Base):
         nullable=False,
     )
     can_price_custom_designs: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Delegated by an admin: lets this staff member lock/unlock time slots at
+    # their branch (e.g. when a slot is already full with walk-ins).
+    can_lock_slots: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

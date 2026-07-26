@@ -16,7 +16,12 @@ from app.bookings.presentation.schemas import BookingCreateRequest
 from app.branches.infrastructure.models import LocationModel
 from app.discounts.application.gift import find_gift_message
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
-from app.shifts.infrastructure.models import StaffRosterModel
+from app.shared.infrastructure.clock import (
+    opening_window_utc,
+    shop_timezone,
+    within_booking_horizon,
+)
+from app.slot_locks.application.locks import is_interval_locked
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
 logger = logging.getLogger(__name__)
@@ -61,19 +66,9 @@ def _staff_is_free(db: Session, staff_id: UUID, start_time: datetime, end_time: 
     return clash is None
 
 
-def _staff_is_on_shift(
-    db: Session, staff_id: UUID, start_time: datetime, end_time: datetime
-) -> bool:
-    shift = (
-        db.query(StaffRosterModel.id)
-        .filter(
-            StaffRosterModel.staff_id == staff_id,
-            StaffRosterModel.start_time <= start_time,
-            StaffRosterModel.end_time >= end_time,
-        )
-        .first()
-    )
-    return shift is not None
+def _within_opening_hours(start_time: datetime, end_time: datetime) -> bool:
+    open_utc, close_utc = opening_window_utc(start_time.astimezone(shop_timezone()).date())
+    return open_utc <= start_time and end_time <= close_utc
 
 
 def _overlaps_prepared_items(
@@ -111,7 +106,7 @@ def _resolve_staff(
             raise InvalidBookingItemsError(
                 "The requested staff member does not work at this branch"
             )
-        if not _staff_is_on_shift(db, staff.id, start_time, end_time):
+        if is_interval_locked(db, branch_id, staff.id, start_time, end_time):
             raise StaffConflictError()
         if not _staff_is_free(db, staff.id, start_time, end_time):
             raise StaffConflictError()
@@ -122,7 +117,7 @@ def _resolve_staff(
     # No preference: give the customer whoever is genuinely available.
     for staff in candidates.order_by(StaffModel.created_at).all():
         if (
-            _staff_is_on_shift(db, staff.id, start_time, end_time)
+            not is_interval_locked(db, branch_id, staff.id, start_time, end_time)
             and _staff_is_free(db, staff.id, start_time, end_time)
             and not _overlaps_prepared_items(prepared_items, staff.id, start_time, end_time)
         ):
@@ -145,6 +140,9 @@ def create_booking(
     prepared_items = []
     total_duration = 0
     total_price = Decimal("0")
+
+    if not within_booking_horizon(booking_date):
+        raise InvalidBookingItemsError("Bookings can be made up to 12 months in advance")
 
     for item in payload.items:
         start_time = item.start_time.astimezone(timezone.utc)
@@ -174,6 +172,8 @@ def create_booking(
             price += Decimal(str(extension.extra_price))
 
         end_time = start_time + timedelta(minutes=duration_min)
+        if not _within_opening_hours(start_time, end_time):
+            raise InvalidBookingItemsError("Bookings must fall within opening hours (09:00-18:00)")
         staff_id = _resolve_staff(
             db, payload.branch_id, item.staff_id, start_time, end_time, prepared_items
         )

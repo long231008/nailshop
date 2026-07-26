@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # Business timezone. Opening hours, "today" and daily counters are computed in this
     # zone, not UTC, so a UK summer day still starts at 00:00 local time.
     SHOP_TIMEZONE: str = "Europe/London"
+    # The whole calendar is open year-round inside these local hours; admins and
+    # authorised staff lock individual time ranges instead of publishing rosters.
+    SHOP_OPEN_HOUR: int = 9
+    SHOP_CLOSE_HOUR: int = 18
+    BOOKING_HORIZON_DAYS: int = 365
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.
     NOTIFICATION_BACKEND: str = "null"
