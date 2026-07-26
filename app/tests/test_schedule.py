@@ -233,6 +233,8 @@ def test_staff_can_view_any_branch_schedule(
     body = response.json()
     everything = body["appointments"] + body["pending"]
     assert len(everything) >= 1
+    # Revenue totals are management information - staff never receive them.
+    assert body["expected_value"] is None
 
 
 def test_upcoming_pending_spans_all_dates(

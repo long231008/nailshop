@@ -12,7 +12,7 @@ from app.schedule.presentation.schemas import (
     PendingAppointment,
 )
 from app.shared.infrastructure.database.session import get_db
-from app.shared.presentation.dependencies import require_roles
+from app.shared.presentation.dependencies import CurrentUser, require_roles
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -22,17 +22,21 @@ def daily_schedule(
     date: date_type,
     branch_id: UUID | None = None,
     db: Session = Depends(get_db),
-    _=Depends(require_roles(UserRole.STAFF)),
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
 ) -> DailyScheduleResponse:
     """One day of the salon book. Admins and staff alike can look at any branch
     (or all of them at once). Appointments are deposit-secured; pending items
-    still need a grant or their deposit."""
+    still need a grant or their deposit. Revenue totals are admin-only."""
     appointments, pending = get_daily_schedule(db, date, branch_id)
 
     return DailyScheduleResponse(
         date=date,
         appointment_count=len(appointments),
-        expected_value=round(sum(a["price"] for a in appointments), 2),
+        expected_value=(
+            round(sum(a["price"] for a in appointments), 2)
+            if current_user.role == UserRole.ADMIN
+            else None
+        ),
         appointments=[DailyAppointment(**a) for a in appointments],
         pending=[PendingAppointment(**p) for p in pending],
     )

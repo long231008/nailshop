@@ -26,6 +26,7 @@ class PendingAppointment(DailyAppointment):
 class DailyScheduleResponse(BaseModel):
     date: date
     appointment_count: int
-    expected_value: float
+    # Revenue is management information: admins get the figure, staff get null.
+    expected_value: float | None
     appointments: list[DailyAppointment]
     pending: list[PendingAppointment]
