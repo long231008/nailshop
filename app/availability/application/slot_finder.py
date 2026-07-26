@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
-from app.shared.infrastructure.clock import now_utc, opening_window_utc, within_booking_horizon
+from app.shared.infrastructure.clock import (
+    is_closed_day,
+    now_utc,
+    opening_window_utc,
+    within_booking_horizon,
+)
 from app.slot_locks.application.locks import locks_overlapping
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
@@ -48,7 +53,7 @@ def find_available_slots(
     if service is None:
         raise ServiceNotFoundError()
 
-    if not within_booking_horizon(target_date):
+    if not within_booking_horizon(target_date) or is_closed_day(target_date):
         return []
 
     if duration_min is None:

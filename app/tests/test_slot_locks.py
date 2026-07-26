@@ -214,10 +214,57 @@ def test_booking_beyond_horizon_is_rejected(
     assert response.status_code == 400
 
 
+def _next_sunday(from_dt):
+    days_ahead = (6 - from_dt.weekday()) % 7 or 7
+    return from_dt + timedelta(days=days_ahead)
+
+
+def test_sundays_have_no_availability(client, seeded_staff, seeded_service, seeded_shift):
+    sunday = _next_sunday(seeded_shift["start"])
+
+    response = client.get(
+        "/app/availability",
+        params={
+            "branch_id": str(seeded_staff["branch_id"]),
+            "service_id": str(seeded_service),
+            "date": sunday.date().isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_sunday_booking_is_rejected_with_facebook_hint(
+    client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift
+):
+    sunday = _next_sunday(seeded_shift["start"])
+
+    response = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": sunday.isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    )
+
+    assert response.status_code == 400
+    assert "Facebook" in response.json()["detail"]
+
+
 def test_year_round_calendar_has_slots_months_ahead(
     client, seeded_staff, seeded_service, seeded_shift
 ):
     months_ahead = (seeded_shift["start"] + timedelta(days=180)).date()
+    if months_ahead.weekday() == 6:  # Sundays are closed
+        months_ahead += timedelta(days=1)
     response = client.get(
         "/app/availability",
         params={

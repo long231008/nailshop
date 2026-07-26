@@ -49,6 +49,12 @@ def start_of_year_utc(now: datetime | None = None) -> datetime:
     return day_bounds_utc(today_in_shop_tz(now).replace(month=1, day=1))[0]
 
 
+def is_closed_day(target_date: date_type) -> bool:
+    """Sundays are always closed - Sunday visits are arranged privately via the
+    salon's Facebook page, never through online booking."""
+    return target_date.weekday() == 6
+
+
 def opening_window_utc(target_date: date_type) -> tuple[datetime, datetime]:
     """The UTC instants of the shop's opening hours on one local calendar day."""
     tz = shop_timezone()

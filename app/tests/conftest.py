@@ -166,6 +166,8 @@ def seeded_staff(db_session, cleanup_records, seeded_branch):
 @pytest.fixture
 def seeded_shift(db_session, cleanup_records, seeded_staff):
     tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    if tomorrow.weekday() == 6:  # Sundays are closed - use Monday instead
+        tomorrow += timedelta(days=1)
     start = tomorrow.replace(hour=9, minute=0, second=0, microsecond=0)
     end = tomorrow.replace(hour=17, minute=0, second=0, microsecond=0)
     shift = StaffRosterModel(

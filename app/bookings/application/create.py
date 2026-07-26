@@ -17,6 +17,7 @@ from app.branches.infrastructure.models import LocationModel
 from app.discounts.application.gift import find_gift_message
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import (
+    is_closed_day,
     opening_window_utc,
     shop_timezone,
     within_booking_horizon,
@@ -143,6 +144,11 @@ def create_booking(
 
     if not within_booking_horizon(booking_date):
         raise InvalidBookingItemsError("Bookings can be made up to 12 months in advance")
+    if is_closed_day(booking_date):
+        raise InvalidBookingItemsError(
+            "We are closed on Sundays. For a Sunday appointment, please message us "
+            "on our Facebook page."
+        )
 
     for item in payload.items:
         start_time = item.start_time.astimezone(timezone.utc)
