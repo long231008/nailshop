@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
@@ -69,3 +70,22 @@ class UserAdminResponse(BaseModel):
     email: str | None
     role: str
     status: str
+
+
+class UserListItem(BaseModel):
+    id: UUID
+    phone_number: str | None
+    email: str | None
+    role: str
+    status: str
+    created_at: datetime
+    # Present when the user already has a staff profile.
+    staff_id: UUID | None = None
+    staff_branch_id: UUID | None = None
+    staff_display_name: str | None = None
+    staff_status: str | None = None
+
+
+class GrantStaffRequest(BaseModel):
+    branch_id: UUID
+    display_name: str = Field(min_length=1, max_length=255)

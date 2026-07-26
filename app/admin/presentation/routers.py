@@ -1,6 +1,7 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.admin.application.staff.activate import activate_staff
@@ -16,20 +17,23 @@ from app.admin.application.staff.reserve import StaffNotFoundError, reserve_staf
 from app.admin.presentation.schemas import (
     DesignPricingPermissionRequest,
     DesignPricingPermissionResponse,
+    GrantStaffRequest,
     SlotLockPermissionRequest,
     SlotLockPermissionResponse,
     StaffActionResponse,
     StaffCreatedResponse,
     StaffCreateRequest,
     UserAdminResponse,
+    UserListItem,
     UserUpdateRequest,
 )
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.auth.domain.value_object import UserRole
 from app.auth.infrastructure.models import UserModel
+from app.branches.infrastructure.models import LocationModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
-from app.staff.infrastructure.models import StaffModel
+from app.staff.infrastructure.models import StaffModel, StaffStatus
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -164,6 +168,145 @@ def set_slot_lock_permission_endpoint(
     db.refresh(staff)
 
     return SlotLockPermissionResponse(staff_id=staff.id, can_lock_slots=staff.can_lock_slots)
+
+
+@router.get("/users", response_model=list[UserListItem])
+def list_users(
+    q: str | None = Query(default=None, max_length=100),
+    role: UserRole | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> list[UserListItem]:
+    query = db.query(UserModel, StaffModel).outerjoin(
+        StaffModel, StaffModel.user_id == UserModel.id
+    )
+    if q:
+        pattern = f"%{q.strip()}%"
+        query = query.filter(
+            or_(UserModel.phone_number.ilike(pattern), UserModel.email.ilike(pattern))
+        )
+    if role is not None:
+        query = query.filter(UserModel.role == role)
+
+    rows = query.order_by(UserModel.created_at.desc()).offset(offset).limit(limit).all()
+
+    return [
+        UserListItem(
+            id=user.id,
+            phone_number=user.phone_number,
+            email=user.email,
+            role=user.role.value,
+            status=user.status.value,
+            created_at=user.created_at,
+            staff_id=staff.id if staff else None,
+            staff_branch_id=staff.branch_id if staff else None,
+            staff_display_name=staff.display_name if staff else None,
+            staff_status=staff.status.value if staff else None,
+        )
+        for user, staff in rows
+    ]
+
+
+@router.post("/users/{user_id}/grant-staff", response_model=StaffCreatedResponse)
+def grant_staff_endpoint(
+    user_id: UUID,
+    payload: GrantStaffRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+) -> StaffCreatedResponse:
+    user = db.get(UserModel, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own role",
+        )
+    if db.get(LocationModel, payload.branch_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+
+    staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
+    if staff is None:
+        staff = StaffModel(
+            user_id=user.id, branch_id=payload.branch_id, display_name=payload.display_name
+        )
+        db.add(staff)
+        db.flush()
+    else:
+        # Re-granting a previously revoked member reactivates their profile.
+        staff.branch_id = payload.branch_id
+        staff.display_name = payload.display_name
+        staff.status = StaffStatus.ACTIVE
+
+    if user.role != UserRole.ADMIN:
+        user.role = UserRole.STAFF
+
+    db.add(
+        AuditLogModel(
+            actor_user_id=current_user.id,
+            action="staff.granted",
+            entity_type="staff",
+            entity_id=staff.id,
+            details={"user_id": str(user.id), "branch_id": str(payload.branch_id)},
+        )
+    )
+    db.commit()
+    db.refresh(staff)
+
+    return StaffCreatedResponse(
+        staff_id=staff.id,
+        user_id=staff.user_id,
+        branch_id=staff.branch_id,
+        display_name=staff.display_name,
+        status=staff.status.value,
+    )
+
+
+@router.post("/users/{user_id}/revoke-staff", response_model=UserAdminResponse)
+def revoke_staff_endpoint(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+) -> UserAdminResponse:
+    user = db.get(UserModel, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own role",
+        )
+
+    staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
+    if staff is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="This user is not a staff member"
+        )
+
+    # block_staff clears future rosters and unassigns their upcoming bookings.
+    block_staff(db, staff.id, current_user.id)
+    user.role = UserRole.CUSTOMER
+    db.add(
+        AuditLogModel(
+            actor_user_id=current_user.id,
+            action="staff.revoked",
+            entity_type="staff",
+            entity_id=staff.id,
+            details={"user_id": str(user.id)},
+        )
+    )
+    db.commit()
+    db.refresh(user)
+
+    return UserAdminResponse(
+        id=user.id,
+        phone_number=user.phone_number,
+        email=user.email,
+        role=user.role.value,
+        status=user.status.value,
+    )
 
 
 @router.patch("/users/{user_id}", response_model=UserAdminResponse)
