@@ -21,6 +21,7 @@ from app.discounts.presentation.routers import router as discounts_router
 from app.me.presentation.routers import router as me_router
 from app.notification.infrastructure.senders import get_notification_sender
 from app.queue.presentation.routers import router as queue_router
+from app.schedule.presentation.routers import router as schedule_router
 from app.services.presentation.routers import router as services_router
 from app.shared.infrastructure.cache.redis_client import redis_client
 from app.shared.infrastructure.config.settings import settings
@@ -100,6 +101,7 @@ app.include_router(branches_router, prefix="/app")
 app.include_router(services_router, prefix="/app")
 app.include_router(shifts_router, prefix="/app")
 app.include_router(slot_locks_router, prefix="/app")
+app.include_router(schedule_router, prefix="/app")
 app.include_router(discounts_router, prefix="/app")
 app.include_router(availability_router, prefix="/app")
 app.include_router(bookings_router, prefix="/app")
