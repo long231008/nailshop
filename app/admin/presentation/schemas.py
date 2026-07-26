@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
@@ -76,14 +76,37 @@ class UserListItem(BaseModel):
     id: UUID
     phone_number: str | None
     email: str | None
+    first_name: str | None
+    surname: str | None
     role: str
     status: str
     created_at: datetime
+    booking_count: int = 0
     # Present when the user already has a staff profile.
     staff_id: UUID | None = None
     staff_branch_id: UUID | None = None
     staff_display_name: str | None = None
     staff_status: str | None = None
+
+
+class UserBookingDetailItem(BaseModel):
+    service_name: str
+    staff_name: str | None
+    start_time: datetime
+    end_time: datetime
+    price: float
+    status: str
+
+
+class UserBookingItem(BaseModel):
+    id: UUID
+    branch_id: UUID
+    booking_date: date
+    status: str
+    total_price: float | None
+    deposit_amount: float | None
+    created_at: datetime
+    details: list[UserBookingDetailItem]
 
 
 class GrantStaffRequest(BaseModel):

@@ -44,11 +44,18 @@ class RequestOtpUseCase:
                     id=uuid.uuid4(),
                     phone_number=input_data.phone_number,
                     email=input_data.email,
+                    first_name=input_data.first_name,
+                    surname=input_data.surname,
                     status=UserStatus.PENDING,
                     role=UserRole.CUSTOMER,
                     created_at=datetime.now(timezone.utc),
                 )
             )
+        elif input_data.first_name and not user.first_name:
+            # A returning account that never gave a name can pick one up here.
+            user.first_name = input_data.first_name
+            user.surname = input_data.surname
+            user = self._user_repository.update(user)
 
         if self._otp_repository.is_resend_blocked(user.id):
             raise OtpResendTooSoonError()

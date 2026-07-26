@@ -26,7 +26,7 @@ from app.auth.infrastructure.facebook_oauth import (
     FacebookTokenExchangeError,
     build_facebook_authorization_url,
     exchange_code_for_access_token,
-    fetch_user_email,
+    fetch_user_profile,
 )
 from app.auth.infrastructure.google_oauth import (
     GoogleTokenExchangeError,
@@ -80,7 +80,12 @@ def _request_otp(
 
     try:
         result = use_case.execute(
-            RegisterUserInput(phone_number=payload.phone_number, email=payload.email)
+            RegisterUserInput(
+                phone_number=payload.phone_number,
+                email=payload.email,
+                first_name=getattr(payload, "first_name", None),
+                surname=getattr(payload, "surname", None),
+            )
         )
     except OtpResendTooSoonError:
         raise HTTPException(
@@ -242,6 +247,8 @@ def google_callback(
             token_provider=JwtTokenProvider(),
             email=claims.get("email"),
             email_verified=claims.get("email_verified", False),
+            first_name=claims.get("given_name"),
+            surname=claims.get("family_name"),
         )
     except GoogleEmailNotVerifiedError:
         raise HTTPException(
@@ -288,13 +295,14 @@ def facebook_callback(
 
     try:
         access_token = exchange_code_for_access_token(code)
-        email = fetch_user_email(access_token)
+        profile = fetch_user_profile(access_token)
     except (FacebookTokenExchangeError, FacebookProfileError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Facebook authentication failed",
         )
 
+    email = profile.get("email")
     try:
         # Facebook only exposes confirmed emails, so the flow is the same as
         # Google's verified-email login.
@@ -303,6 +311,8 @@ def facebook_callback(
             token_provider=JwtTokenProvider(),
             email=email,
             email_verified=email is not None,
+            first_name=profile.get("first_name"),
+            surname=profile.get("last_name"),
         )
     except GoogleEmailNotVerifiedError:
         raise HTTPException(

@@ -18,6 +18,8 @@ class UserModel(Base):
     )
     phone_number: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    surname: Mapped[str | None] = mapped_column(String(100), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[UserStatus] = mapped_column(
         SAEnum(UserStatus, name="user_status", native_enum=False, length=20),

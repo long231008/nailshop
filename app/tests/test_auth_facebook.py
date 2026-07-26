@@ -10,11 +10,20 @@ def _configure_facebook(monkeypatch):
     monkeypatch.setattr(settings, "FACEBOOK_APP_SECRET", "test-app-secret")
 
 
-def _mock_facebook(monkeypatch, email):
+def _mock_facebook(monkeypatch, email, first_name="Fb", last_name="User"):
     monkeypatch.setattr(
         router_module, "exchange_code_for_access_token", lambda code: "fake-access-token"
     )
-    monkeypatch.setattr(router_module, "fetch_user_email", lambda token: email)
+    monkeypatch.setattr(
+        router_module,
+        "fetch_user_profile",
+        lambda token: {
+            "id": "fb-1",
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+    )
 
 
 def _login_and_get_state(client):

@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.admin.application.staff.activate import activate_staff
@@ -25,6 +25,8 @@ from app.admin.presentation.schemas import (
     StaffCreatedResponse,
     StaffCreateRequest,
     UserAdminResponse,
+    UserBookingDetailItem,
+    UserBookingItem,
     UserDeleteResponse,
     UserListItem,
     UserUpdateRequest,
@@ -32,7 +34,9 @@ from app.admin.presentation.schemas import (
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.auth.domain.value_object import UserRole
 from app.auth.infrastructure.models import UserModel
+from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
 from app.branches.infrastructure.models import LocationModel
+from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.staff.infrastructure.models import StaffModel, StaffStatus
@@ -181,13 +185,25 @@ def list_users(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> list[UserListItem]:
-    query = db.query(UserModel, StaffModel).outerjoin(
+    booking_counts = (
+        select(func.count(BookingModel.id))
+        .where(BookingModel.customer_id == UserModel.id)
+        .correlate(UserModel)
+        .scalar_subquery()
+    )
+
+    query = db.query(UserModel, StaffModel, booking_counts).outerjoin(
         StaffModel, StaffModel.user_id == UserModel.id
     )
     if q:
         pattern = f"%{q.strip()}%"
         query = query.filter(
-            or_(UserModel.phone_number.ilike(pattern), UserModel.email.ilike(pattern))
+            or_(
+                UserModel.phone_number.ilike(pattern),
+                UserModel.email.ilike(pattern),
+                UserModel.first_name.ilike(pattern),
+                UserModel.surname.ilike(pattern),
+            )
         )
     if role is not None:
         query = query.filter(UserModel.role == role)
@@ -199,15 +215,76 @@ def list_users(
             id=user.id,
             phone_number=user.phone_number,
             email=user.email,
+            first_name=user.first_name,
+            surname=user.surname,
             role=user.role.value,
             status=user.status.value,
             created_at=user.created_at,
+            booking_count=booking_count,
             staff_id=staff.id if staff else None,
             staff_branch_id=staff.branch_id if staff else None,
             staff_display_name=staff.display_name if staff else None,
             staff_status=staff.status.value if staff else None,
         )
-        for user, staff in rows
+        for user, staff, booking_count in rows
+    ]
+
+
+@router.get("/users/{user_id}/bookings", response_model=list[UserBookingItem])
+def list_user_bookings(
+    user_id: UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> list[UserBookingItem]:
+    if db.get(UserModel, user_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    bookings = (
+        db.query(BookingModel)
+        .filter(BookingModel.customer_id == user_id)
+        .order_by(BookingModel.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    booking_ids = [b.id for b in bookings]
+
+    details_by_booking: dict[UUID, list[UserBookingDetailItem]] = {}
+    if booking_ids:
+        detail_rows = (
+            db.query(BookingDetailModel, ServiceModel.name, StaffModel.display_name)
+            .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+            .outerjoin(StaffModel, BookingDetailModel.staff_id == StaffModel.id)
+            .filter(BookingDetailModel.booking_id.in_(booking_ids))
+            .order_by(BookingDetailModel.start_time)
+            .all()
+        )
+        for detail, service_name, staff_name in detail_rows:
+            details_by_booking.setdefault(detail.booking_id, []).append(
+                UserBookingDetailItem(
+                    service_name=service_name,
+                    staff_name=staff_name,
+                    start_time=detail.start_time,
+                    end_time=detail.end_time,
+                    price=float(detail.price),
+                    status=detail.status.value,
+                )
+            )
+
+    return [
+        UserBookingItem(
+            id=b.id,
+            branch_id=b.branch_id,
+            booking_date=b.booking_date,
+            status=b.status.value,
+            total_price=float(b.total_price) if b.total_price is not None else None,
+            deposit_amount=float(b.deposit_amount) if b.deposit_amount is not None else None,
+            created_at=b.created_at,
+            details=details_by_booking.get(b.id, []),
+        )
+        for b in bookings
     ]
 
 

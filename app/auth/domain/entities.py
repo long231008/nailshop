@@ -13,3 +13,5 @@ class User:
     status: UserStatus
     role: UserRole
     created_at: datetime
+    first_name: str | None = None
+    surname: str | None = None

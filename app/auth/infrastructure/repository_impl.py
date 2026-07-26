@@ -41,6 +41,8 @@ class SqlAlchemyUserRepository(UserRepository):
         model = self._db.get(UserModel, user.id)
         model.phone_number = user.phone_number
         model.email = user.email
+        model.first_name = user.first_name
+        model.surname = user.surname
         model.status = user.status
         model.role = user.role
         self._db.commit()

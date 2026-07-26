@@ -25,6 +25,8 @@ def login_or_register_with_google(
     token_provider: TokenProvider,
     email: str | None,
     email_verified: bool,
+    first_name: str | None = None,
+    surname: str | None = None,
 ) -> GoogleLoginOutput:
     if not email or not email_verified:
         raise GoogleEmailNotVerifiedError()
@@ -37,6 +39,8 @@ def login_or_register_with_google(
                 id=uuid.uuid4(),
                 phone_number=None,
                 email=email,
+                first_name=first_name,
+                surname=surname,
                 status=UserStatus.ACTIVE,
                 role=UserRole.CUSTOMER,
                 created_at=datetime.now(timezone.utc),
@@ -44,9 +48,17 @@ def login_or_register_with_google(
         )
     elif user.status == UserStatus.BLOCKED:
         raise UserBlockedError()
-    elif user.status != UserStatus.ACTIVE:
-        user.status = UserStatus.ACTIVE
-        user = user_repository.update(user)
+    else:
+        changed = False
+        if user.status != UserStatus.ACTIVE:
+            user.status = UserStatus.ACTIVE
+            changed = True
+        if first_name and not user.first_name:
+            user.first_name = first_name
+            user.surname = surname
+            changed = True
+        if changed:
+            user = user_repository.update(user)
 
     access_token = token_provider.create_access_token(user_id=user.id, role=user.role)
 

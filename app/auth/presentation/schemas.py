@@ -8,6 +8,9 @@ PHONE_PATTERN = r"^\+?[0-9]{6,15}$"
 class RequestOtpRequest(BaseModel):
     phone_number: str | None = Field(default=None, pattern=PHONE_PATTERN, examples=["0901234567"])
     email: EmailStr | None = None
+    # Stored when the request creates a new account (or fills a missing name).
+    first_name: str | None = Field(default=None, max_length=100)
+    surname: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def require_identifier(self) -> "RequestOtpRequest":

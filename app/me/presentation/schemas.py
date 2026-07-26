@@ -8,6 +8,8 @@ class MyProfileResponse(BaseModel):
     id: UUID
     phone_number: str | None
     email: str | None
+    first_name: str | None
+    surname: str | None
     role: str
     status: str
     created_at: datetime
@@ -16,6 +18,8 @@ class MyProfileResponse(BaseModel):
 class MyProfileUpdateRequest(BaseModel):
     phone_number: str | None = Field(default=None, pattern=r"^\+?[0-9]{6,15}$")
     email: EmailStr | None = None
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    surname: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class MyBookingSummary(BaseModel):

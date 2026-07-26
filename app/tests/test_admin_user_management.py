@@ -109,6 +109,93 @@ def test_revoke_staff_on_plain_customer_returns_404(client, admin_headers, custo
     assert response.status_code == 404
 
 
+def test_names_flow_from_registration_to_admin_list(
+    client, fake_redis, admin_headers, unique_phone, cleanup_identifiers
+):
+    cleanup_identifiers["phones"].append(unique_phone)
+
+    client.post(
+        "/app/auth/request-otp",
+        json={"phone_number": unique_phone, "first_name": "Lan", "surname": "Nguyen"},
+    )
+
+    listing = client.get(
+        "/app/admin/users", params={"q": unique_phone}, headers=admin_headers
+    ).json()
+    entry = next(u for u in listing if u["phone_number"] == unique_phone)
+    assert entry["first_name"] == "Lan"
+    assert entry["surname"] == "Nguyen"
+
+    # Names are searchable too.
+    by_name = client.get("/app/admin/users", params={"q": "Lan"}, headers=admin_headers).json()
+    assert any(u["phone_number"] == unique_phone for u in by_name)
+
+
+def test_profile_update_saves_names(client, customer_identity):
+    updated = client.patch(
+        "/app/me",
+        json={"first_name": "Mai", "surname": "Tran"},
+        headers=customer_identity["headers"],
+    )
+    assert updated.status_code == 200
+    assert updated.json()["first_name"] == "Mai"
+    assert updated.json()["surname"] == "Tran"
+
+    profile = client.get("/app/me", headers=customer_identity["headers"]).json()
+    assert profile["first_name"] == "Mai"
+
+
+def test_admin_sees_booking_count_and_each_booking(
+    client,
+    admin_headers,
+    customer_identity,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    listing = client.get("/app/admin/users", headers=admin_headers).json()
+    entry = next(u for u in listing if u["id"] == str(customer_identity["id"]))
+    assert entry["booking_count"] == 1
+
+    bookings = client.get(
+        f"/app/admin/users/{customer_identity['id']}/bookings", headers=admin_headers
+    )
+    assert bookings.status_code == 200
+    body = bookings.json()
+    assert len(body) == 1
+    assert body[0]["id"] == booking["id"]
+    assert body[0]["details"][0]["service_name"] == "Gel Manicure"
+    assert body[0]["details"][0]["staff_name"] == "Test Staff"
+
+
+def test_user_bookings_endpoint_requires_admin(client, customer_identity):
+    response = client.get(
+        f"/app/admin/users/{customer_identity['id']}/bookings",
+        headers=customer_identity["headers"],
+    )
+    assert response.status_code == 403
+
+
 def test_delete_user_without_history_removes_row(
     client, admin_headers, customer_identity, db_session
 ):

@@ -54,13 +54,13 @@ def exchange_code_for_access_token(code: str) -> str:
     return response.json()["access_token"]
 
 
-def fetch_user_email(access_token: str) -> str | None:
-    """Facebook only returns an email the user has confirmed with them."""
+def fetch_user_profile(access_token: str) -> dict:
+    """Email (only if the user confirmed it with Facebook) plus their name."""
     response = requests.get(
         FACEBOOK_PROFILE_ENDPOINT,
-        params={"fields": "id,email", "access_token": access_token},
+        params={"fields": "id,email,first_name,last_name", "access_token": access_token},
         timeout=10,
     )
     if response.status_code != 200:
         raise FacebookProfileError(response.text)
-    return response.json().get("email")
+    return response.json()

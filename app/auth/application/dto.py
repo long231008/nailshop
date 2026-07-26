@@ -8,6 +8,8 @@ from app.auth.domain.value_object import UserRole
 class RegisterUserInput:
     phone_number: str | None
     email: str | None
+    first_name: str | None = None
+    surname: str | None = None
 
 
 @dataclass
