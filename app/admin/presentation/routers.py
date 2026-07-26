@@ -14,6 +14,7 @@ from app.admin.application.staff.create import (
 )
 from app.admin.application.staff.design_pricing import set_design_pricing_permission
 from app.admin.application.staff.reserve import StaffNotFoundError, reserve_staff
+from app.admin.application.users.delete import delete_or_anonymize_user
 from app.admin.presentation.schemas import (
     DesignPricingPermissionRequest,
     DesignPricingPermissionResponse,
@@ -24,6 +25,7 @@ from app.admin.presentation.schemas import (
     StaffCreatedResponse,
     StaffCreateRequest,
     UserAdminResponse,
+    UserDeleteResponse,
     UserListItem,
     UserUpdateRequest,
 )
@@ -307,6 +309,30 @@ def revoke_staff_endpoint(
         role=user.role.value,
         status=user.status.value,
     )
+
+
+@router.delete("/users/{user_id}", response_model=UserDeleteResponse)
+def delete_user_endpoint(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+) -> UserDeleteResponse:
+    user = db.get(UserModel, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own account",
+        )
+    if user.role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Demote this admin to customer before deleting the account",
+        )
+
+    mode = delete_or_anonymize_user(db, user_id, current_user.id)
+    return UserDeleteResponse(id=user_id, mode=mode)
 
 
 @router.patch("/users/{user_id}", response_model=UserAdminResponse)

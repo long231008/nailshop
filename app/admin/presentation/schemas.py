@@ -89,3 +89,10 @@ class UserListItem(BaseModel):
 class GrantStaffRequest(BaseModel):
     branch_id: UUID
     display_name: str = Field(min_length=1, max_length=255)
+
+
+class UserDeleteResponse(BaseModel):
+    id: UUID
+    # "deleted": the row is gone. "anonymized": the account had booking/payment
+    # history, so personal data was stripped and login blocked instead.
+    mode: str

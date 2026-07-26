@@ -2,7 +2,7 @@
 
 import uuid
 
-from app.auth.domain.value_object import UserRole
+from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
@@ -107,3 +107,83 @@ def test_revoke_staff_on_plain_customer_returns_404(client, admin_headers, custo
         headers=admin_headers,
     )
     assert response.status_code == 404
+
+
+def test_delete_user_without_history_removes_row(
+    client, admin_headers, customer_identity, db_session
+):
+    response = client.delete(f"/app/admin/users/{customer_identity['id']}", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "deleted"
+    assert db_session.get(UserModel, customer_identity["id"]) is None
+
+
+def test_delete_user_with_bookings_anonymizes_instead(
+    client,
+    admin_headers,
+    customer_identity,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    db_session,
+    cleanup_records,
+):
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    response = client.delete(f"/app/admin/users/{customer_identity['id']}", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "anonymized"
+
+    user = db_session.get(UserModel, customer_identity["id"])
+    db_session.refresh(user)
+    assert user is not None
+    assert user.phone_number is None
+    assert user.email is None
+    assert user.status.value == "blocked"
+
+    # The booking history survives for revenue reporting.
+    from app.bookings.infrastructure.models import BookingModel
+
+    assert db_session.get(BookingModel, uuid.UUID(booking["id"])) is not None
+
+
+def test_admin_cannot_delete_self_or_other_admin(
+    client, admin_identity, db_session, cleanup_records
+):
+    me = client.delete(
+        f"/app/admin/users/{admin_identity['id']}", headers=admin_identity["headers"]
+    )
+    assert me.status_code == 400
+
+    other_admin = UserModel(
+        phone_number=f"09{uuid.uuid4().int % 10**8:08d}",
+        status=UserStatus.ACTIVE,
+        role=UserRole.ADMIN,
+    )
+    db_session.add(other_admin)
+    db_session.commit()
+    cleanup_records.append(("users", other_admin.id))
+
+    response = client.delete(
+        f"/app/admin/users/{other_admin.id}", headers=admin_identity["headers"]
+    )
+    assert response.status_code == 400
