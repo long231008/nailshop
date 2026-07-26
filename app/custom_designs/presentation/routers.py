@@ -51,6 +51,9 @@ def _authorize_price_setter(db: Session, current_user: CurrentUser) -> None:
         )
 
 
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic"}
+
+
 @router.post("", response_model=CustomDesignResponse, status_code=status.HTTP_201_CREATED)
 def create_custom_design(
     file: UploadFile = File(...),
@@ -59,6 +62,15 @@ def create_custom_design(
     current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
     storage: CloudinaryStorage = Depends(get_design_storage),
 ) -> CustomDesignResponse:
+    # The declared type is client-controlled, so this is a first gate only;
+    # Cloudinary re-validates the actual bytes because we upload with
+    # resource_type="image".
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only image uploads (JPEG, PNG, WebP, GIF, HEIC) are accepted",
+        )
+
     image_url = storage.save(file)
     design = CustomDesignModel(
         customer_id=current_user.id, image_url=image_url, description=description

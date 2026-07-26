@@ -1,7 +1,9 @@
-import pytest
 from app.notification.application import notify
 from app.notification.domain.notification import Notification, mask_destination
-from app.notification.infrastructure.senders import ConsoleNotificationSender, NullNotificationSender
+from app.notification.infrastructure.senders import (
+    ConsoleNotificationSender,
+    NullNotificationSender,
+)
 
 
 def test_mask_destination_phone():
@@ -47,6 +49,7 @@ def test_console_and_null_senders(caplog):
 def test_notify_otp_skips_when_no_destination():
     class MockSender:
         called = False
+
         def send(self, notification: Notification) -> None:
             self.called = True
 

@@ -1,4 +1,5 @@
 from fastapi import status
+
 from app.shared.infrastructure.rate_limit import client_ip
 
 
@@ -31,9 +32,12 @@ class DummyRequest:
 
 def test_client_ip_extraction_without_trust_proxy(monkeypatch):
     from app.shared.infrastructure.config import settings
+
     monkeypatch.setattr(settings.settings, "TRUST_PROXY_HEADERS", False)
-    
-    req = DummyRequest(headers={"X-Forwarded-For": "203.0.113.195, 70.41.3.18"}, client_host="10.0.0.1")
+
+    req = DummyRequest(
+        headers={"X-Forwarded-For": "203.0.113.195, 70.41.3.18"}, client_host="10.0.0.1"
+    )
     ip = client_ip(req)
     # When TRUST_PROXY_HEADERS is False, X-Forwarded-For is ignored
     assert ip == "10.0.0.1"
@@ -41,9 +45,12 @@ def test_client_ip_extraction_without_trust_proxy(monkeypatch):
 
 def test_client_ip_extraction_with_trust_proxy(monkeypatch):
     from app.shared.infrastructure.config import settings
+
     monkeypatch.setattr(settings.settings, "TRUST_PROXY_HEADERS", True)
-    
-    req = DummyRequest(headers={"X-Forwarded-For": "203.0.113.195, 70.41.3.18"}, client_host="10.0.0.1")
+
+    req = DummyRequest(
+        headers={"X-Forwarded-For": "203.0.113.195, 70.41.3.18"}, client_host="10.0.0.1"
+    )
     ip = client_ip(req)
     # When TRUST_PROXY_HEADERS is True, the client IP is extracted from X-Forwarded-For
     assert ip == "203.0.113.195"

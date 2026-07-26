@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta, timezone
+
 from fastapi import status
 
 from app.audit_log.infrastructure.models import AuditLogModel
@@ -40,7 +41,9 @@ def test_audit_log_filtering_by_date(client, admin_headers, db_session, cleanup_
     from_time = (now - timedelta(minutes=5)).isoformat()
     to_time = (now + timedelta(minutes=5)).isoformat()
 
-    resp = client.get("/app/audit-log", params={"from": from_time, "to": to_time}, headers=admin_headers)
+    resp = client.get(
+        "/app/audit-log", params={"from": from_time, "to": to_time}, headers=admin_headers
+    )
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()
     assert any(entry["id"] == str(log_entry.id) for entry in data)
@@ -48,7 +51,9 @@ def test_audit_log_filtering_by_date(client, admin_headers, db_session, cleanup_
     # Query with future date range excluding `now`
     future_from = (now + timedelta(days=1)).isoformat()
     future_to = (now + timedelta(days=2)).isoformat()
-    resp_future = client.get("/app/audit-log", params={"from": future_from, "to": future_to}, headers=admin_headers)
+    resp_future = client.get(
+        "/app/audit-log", params={"from": future_from, "to": future_to}, headers=admin_headers
+    )
     assert resp_future.status_code == status.HTTP_200_OK
     data_future = resp_future.json()
     assert not any(entry["id"] == str(log_entry.id) for entry in data_future)

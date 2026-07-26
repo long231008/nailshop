@@ -1,9 +1,11 @@
 import io
+
 from fastapi import status
-from sqlalchemy import text
 
 
-def test_custom_design_creation_and_list_automation(client, customer_headers, admin_headers, db_session, cleanup_records):
+def test_custom_design_creation_and_list_automation(
+    client, customer_headers, admin_headers, db_session, cleanup_records
+):
     # Test uploading a valid custom design image
     file_data = io.BytesIO(b"fake image data content")
     files = {"file": ("design.png", file_data, "image/png")}

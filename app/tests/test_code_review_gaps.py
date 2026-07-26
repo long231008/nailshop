@@ -1,6 +1,7 @@
 import io
 import uuid
 from datetime import datetime, timezone
+
 from fastapi import status
 
 from app.auth.domain.value_object import UserRole, UserStatus
@@ -12,7 +13,9 @@ from app.webhooks.application.payment import process_payment_webhook
 from app.webhooks.infrastructure.models import PaymentTransactionType
 
 
-def test_gap_1_custom_design_upload_rejects_non_image_file(client, customer_headers, cleanup_records):
+def test_gap_1_custom_design_upload_rejects_non_image_file(
+    client, customer_headers, cleanup_records
+):
     """REVIEW FINDING: Upload endpoint should reject non-image file types (e.g. .sh, .exe)."""
     file_data = io.BytesIO(b"echo 'malicious script'")
     files = {"file": ("script.sh", file_data, "text/x-shellscript")}
@@ -49,9 +52,15 @@ def test_gap_2_jwt_auth_rejects_inactive_or_pending_user(client, db_session, cle
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_gap_3_expire_soft_locks_safeguard_when_redis_key_lost(db_session, fake_redis, seeded_branch, cleanup_records):
+def test_gap_3_expire_soft_locks_safeguard_when_redis_key_lost(
+    db_session, fake_redis, seeded_branch, cleanup_records
+):
     """REVIEW FINDING: expire_unpaid_soft_locks should not cancel freshly approved bookings if Redis key is missing."""
-    user = UserModel(phone_number=f"09{uuid.uuid4().int % 10**8:08d}", status=UserStatus.ACTIVE, role=UserRole.CUSTOMER)
+    user = UserModel(
+        phone_number=f"09{uuid.uuid4().int % 10**8:08d}",
+        status=UserStatus.ACTIVE,
+        role=UserRole.CUSTOMER,
+    )
     db_session.add(user)
     db_session.flush()
 
@@ -81,9 +90,15 @@ def test_gap_3_expire_soft_locks_safeguard_when_redis_key_lost(db_session, fake_
     assert booking.status == BookingStatus.APPROVED
 
 
-def test_gap_4_payment_webhook_updates_pending_booking_status(db_session, seeded_branch, cleanup_records):
+def test_gap_4_payment_webhook_updates_pending_booking_status(
+    db_session, seeded_branch, cleanup_records
+):
     """REVIEW FINDING: process_payment_webhook should update booking status when deposit payment succeeds."""
-    user = UserModel(phone_number=f"09{uuid.uuid4().int % 10**8:08d}", status=UserStatus.ACTIVE, role=UserRole.CUSTOMER)
+    user = UserModel(
+        phone_number=f"09{uuid.uuid4().int % 10**8:08d}",
+        status=UserStatus.ACTIVE,
+        role=UserRole.CUSTOMER,
+    )
     db_session.add(user)
     db_session.flush()
 

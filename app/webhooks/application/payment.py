@@ -5,7 +5,9 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.bookings.infrastructure.models import BookingModel
+from app.audit_log.infrastructure.models import AuditLogModel
+from app.bookings.infrastructure.models import BookingModel, BookingStatus
+from app.shared.infrastructure.clock import now_utc
 from app.shared.infrastructure.config.settings import settings
 from app.webhooks.infrastructure.models import (
     PaymentTransactionModel,
@@ -98,6 +100,28 @@ def process_payment_webhook(
         status=status,
     )
     db.add(transaction)
+
+    # A deposit that arrives while the booking is still pending confirms it on the
+    # spot - the customer has already put money down. Only when deposit_amount is
+    # known, so the amount check above has actually run.
+    if (
+        status == PaymentTransactionStatus.SUCCESS
+        and transaction_type == PaymentTransactionType.DEPOSIT
+        and booking.status == BookingStatus.PENDING
+        and booking.deposit_amount is not None
+    ):
+        booking.status = BookingStatus.APPROVED
+        booking.approved_at = now_utc()
+        db.add(
+            AuditLogModel(
+                actor_user_id=None,
+                action="booking.approved",
+                entity_type="booking",
+                entity_id=booking.id,
+                details={"reason": "deposit received while booking was pending"},
+            )
+        )
+
     db.commit()
     db.refresh(transaction)
     return transaction, status == PaymentTransactionStatus.SUCCESS
