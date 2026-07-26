@@ -17,8 +17,15 @@ class DailyAppointment(BaseModel):
     status: str
 
 
+class PendingAppointment(DailyAppointment):
+    # awaiting_approval: needs an admin/staff grant.
+    # awaiting_deposit: granted, deposit not received yet.
+    stage: str
+
+
 class DailyScheduleResponse(BaseModel):
     date: date
     appointment_count: int
     expected_value: float
     appointments: list[DailyAppointment]
+    pending: list[PendingAppointment]

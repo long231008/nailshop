@@ -146,7 +146,8 @@ def approve_booking_endpoint(
     booking_id: UUID,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
-    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+    # Granting a booking is day-to-day salon work: staff can do it too.
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
     notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> BookingApproveResponse:
     try:
