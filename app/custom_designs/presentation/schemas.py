@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class CustomDesignResponse(BaseModel):
     id: UUID
     customer_id: UUID
-    image_url: str
+    image_url: str | None
     description: str | None
     estimated_price: float | None
     status: str

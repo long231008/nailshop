@@ -35,7 +35,7 @@ class MyBookingSummary(BaseModel):
 
 class MyCustomDesignSummary(BaseModel):
     id: UUID
-    image_url: str
+    image_url: str | None
     description: str | None
     estimated_price: float | None
     status: str

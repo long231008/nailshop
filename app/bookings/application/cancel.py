@@ -10,7 +10,25 @@ from app.bookings.application.exceptions import (
     NotBookingOwnerError,
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
+from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 from app.shared.infrastructure.clock import now_utc
+
+
+def release_designs(db: Session, booking_id) -> None:
+    """A cancelled booking frees its custom designs so they can be rebooked."""
+    details = (
+        db.query(BookingDetailModel)
+        .filter(
+            BookingDetailModel.booking_id == booking_id,
+            BookingDetailModel.custom_design_id.isnot(None),
+        )
+        .all()
+    )
+    for detail in details:
+        design = db.get(CustomDesignModel, detail.custom_design_id)
+        if design is not None and design.status == CustomDesignStatus.ACCEPTED:
+            design.status = CustomDesignStatus.PRICED
+
 
 CANCELLABLE_STATUSES = (BookingStatus.PENDING, BookingStatus.APPROVED)
 # Customers cannot cancel at the door; inside this window it becomes a no-show
@@ -41,6 +59,7 @@ def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingM
         )
 
     booking.status = BookingStatus.CANCELLED
+    release_designs(db, booking.id)
     db.add(
         AuditLogModel(
             actor_user_id=customer_id,

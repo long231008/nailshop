@@ -20,6 +20,9 @@ from app.custom_designs.presentation.schemas import (
     CustomDesignPriceRequest,
     CustomDesignResponse,
 )
+from app.notification.application.notify import notify_design_priced
+from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.senders import get_notification_sender
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.staff.infrastructure.models import StaffModel
@@ -56,22 +59,31 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "im
 
 @router.post("", response_model=CustomDesignResponse, status_code=status.HTTP_201_CREATED)
 def create_custom_design(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     description: str | None = Form(default=None),
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
     storage: CloudinaryStorage = Depends(get_design_storage),
 ) -> CustomDesignResponse:
-    # The declared type is client-controlled, so this is a first gate only;
-    # Cloudinary re-validates the actual bytes because we upload with
-    # resource_type="image".
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
+    # A request needs at least one of the two: a reference photo or words.
+    if file is None and not (description and description.strip()):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only image uploads (JPEG, PNG, WebP, GIF, HEIC) are accepted",
+            detail="Please attach a photo or describe the design you want",
         )
 
-    image_url = storage.save(file)
+    image_url = None
+    if file is not None:
+        # The declared type is client-controlled, so this is a first gate only;
+        # Cloudinary re-validates the actual bytes because we upload with
+        # resource_type="image".
+        if file.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only image uploads (JPEG, PNG, WebP, GIF, HEIC) are accepted",
+            )
+        image_url = storage.save(file)
+
     design = CustomDesignModel(
         customer_id=current_user.id, image_url=image_url, description=description
     )
@@ -109,6 +121,7 @@ def set_custom_design_price(
     payload: CustomDesignPriceRequest,
     db: Session = Depends(get_db),
     current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> CustomDesignResponse:
     _authorize_price_setter(db, current_user)
 
@@ -121,6 +134,9 @@ def set_custom_design_price(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This design has already been accepted or rejected",
         )
+
+    # The quote travels to the customer on the channel they signed up with.
+    notify_design_priced(notification_sender, db, design.customer_id, float(design.estimated_price))
 
     return _to_response(design)
 

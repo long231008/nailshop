@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str
+    # Where this API is reachable from the browser (used for locally stored images).
+    BACKEND_PUBLIC_URL: str = "http://localhost:8000"
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str
     GOOGLE_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/google/callback"
@@ -29,6 +31,10 @@ class Settings(BaseSettings):
     # authorised staff lock individual time ranges instead of publishing rosters.
     SHOP_OPEN_HOUR: int = 9
     SHOP_CLOSE_HOUR: int = 18
+    # Last accepted start time. A long treatment starting then may run past
+    # closing - that's the salon's explicit choice.
+    SHOP_LAST_BOOKING_HOUR: int = 17
+    SHOP_LAST_BOOKING_MINUTE: int = 30
     BOOKING_HORIZON_DAYS: int = 365
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.

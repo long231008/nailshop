@@ -26,7 +26,8 @@ class CustomDesignModel(Base):
     customer_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
-    image_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Optional: a request may be a written description with no reference photo.
+    image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     estimated_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     status: Mapped[CustomDesignStatus] = mapped_column(

@@ -8,6 +8,7 @@ from app.bookings.infrastructure.models import BookingDetailModel, BookingModel,
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import (
     is_closed_day,
+    last_booking_utc,
     now_utc,
     opening_window_utc,
     within_booking_horizon,
@@ -71,13 +72,17 @@ def find_available_slots(
         staff_query = staff_query.filter(StaffModel.id == staff_id)
     staff_list = staff_query.all()
 
-    open_utc, close_utc = opening_window_utc(target_date)
+    open_utc, _close_utc = opening_window_utc(target_date)
+    last_start = last_booking_utc(target_date)
+    # A treatment starting at the last accepted time may run past closing, so the
+    # working span extends to cover it.
+    span_end = last_start + timedelta(minutes=duration_min)
     # Past slots are never offered: today's window starts at "now + lead time".
     earliest_start = max(open_utc, now_utc() + timedelta(minutes=MIN_LEAD_MINUTES))
-    if earliest_start >= close_utc:
+    if earliest_start > last_start:
         return []
 
-    locks = locks_overlapping(db, branch_id, open_utc, close_utc)
+    locks = locks_overlapping(db, branch_id, open_utc, span_end)
 
     slots = []
     for staff in staff_list:
@@ -89,7 +94,7 @@ def find_available_slots(
             .filter(
                 BookingDetailModel.staff_id == staff.id,
                 BookingModel.status.notin_([BookingStatus.CANCELLED, BookingStatus.NO_SHOW]),
-                BookingDetailModel.start_time < close_utc,
+                BookingDetailModel.start_time < span_end,
                 BookingDetailModel.end_time > open_utc,
             )
             .all()
@@ -111,17 +116,19 @@ def find_available_slots(
         cursor = earliest_start
         free_windows = []
         for busy_start, busy_end in busy_windows:
-            if busy_end <= cursor or busy_start >= close_utc:
+            if busy_end <= cursor or busy_start >= span_end:
                 continue
             if busy_start > cursor:
-                free_windows.append((cursor, min(busy_start, close_utc)))
+                free_windows.append((cursor, min(busy_start, span_end)))
             cursor = max(cursor, busy_end)
-        if cursor < close_utc:
-            free_windows.append((cursor, close_utc))
+        if cursor < span_end:
+            free_windows.append((cursor, span_end))
 
         for win_start, win_end in free_windows:
             slot_start = _align_to_grid(win_start)
-            while slot_start + timedelta(minutes=duration_min) <= win_end:
+            while (
+                slot_start <= last_start and slot_start + timedelta(minutes=duration_min) <= win_end
+            ):
                 slots.append(
                     {
                         "staff_id": staff.id,

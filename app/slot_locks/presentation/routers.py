@@ -1,3 +1,4 @@
+from datetime import date as date_type
 from datetime import datetime
 from uuid import UUID
 
@@ -7,10 +8,15 @@ from sqlalchemy.orm import Session
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.auth.domain.value_object import UserRole
 from app.branches.infrastructure.models import LocationModel
+from app.shared.infrastructure.clock import day_bounds_utc
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.slot_locks.infrastructure.models import SlotLockModel
-from app.slot_locks.presentation.schemas import SlotLockCreateRequest, SlotLockResponse
+from app.slot_locks.presentation.schemas import (
+    PublicLockedRange,
+    SlotLockCreateRequest,
+    SlotLockResponse,
+)
 from app.staff.infrastructure.models import StaffModel
 
 router = APIRouter(prefix="/slot-locks", tags=["slot-locks"])
@@ -91,6 +97,32 @@ def create_slot_lock(
     db.commit()
     db.refresh(lock)
     return _to_response(lock)
+
+
+@router.get("/public", response_model=list[PublicLockedRange])
+def public_locked_ranges(
+    branch_id: UUID,
+    date: date_type,
+    db: Session = Depends(get_db),
+) -> list[PublicLockedRange]:
+    """Branch-wide locked ranges of one day, for the customer booking page.
+
+    Customers see these crossed out instead of silently missing. Staff-specific
+    locks are not listed - another staff member may still be free then.
+    """
+    day_start, day_end = day_bounds_utc(date)
+    locks = (
+        db.query(SlotLockModel)
+        .filter(
+            SlotLockModel.branch_id == branch_id,
+            SlotLockModel.staff_id.is_(None),
+            SlotLockModel.start_time < day_end,
+            SlotLockModel.end_time > day_start,
+        )
+        .order_by(SlotLockModel.start_time)
+        .all()
+    )
+    return [PublicLockedRange(start_time=lock.start_time, end_time=lock.end_time) for lock in locks]
 
 
 @router.get("", response_model=list[SlotLockResponse])

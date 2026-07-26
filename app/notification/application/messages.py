@@ -68,6 +68,20 @@ def deposit_failed_notification(phone_number: str | None, email: str | None) -> 
     )
 
 
+def design_priced_notification(
+    phone_number: str | None, email: str | None, price: float
+) -> Notification:
+    return Notification(
+        subject="Your nail design has been priced",
+        body=(
+            f"Good news - our team has looked at your design and quoted £{price:.2f}. "
+            "Log in to your account to accept the quote and book your appointment."
+        ),
+        phone_number=phone_number,
+        email=email,
+    )
+
+
 def booking_cancelled_notification(phone_number: str | None, email: str | None) -> Notification:
     return Notification(
         subject="Your booking was released",

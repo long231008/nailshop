@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.bookings.application.approve import SOFT_LOCK_TTL_SECONDS
+from app.bookings.application.cancel import release_designs
 from app.bookings.infrastructure.models import BookingModel, BookingStatus
 from app.notification.application.notify import notify_booking_cancelled
 from app.notification.domain.sender import NotificationSender
@@ -60,6 +61,7 @@ def expire_unpaid_soft_locks(
             continue
 
         booking.status = BookingStatus.CANCELLED
+        release_designs(db, booking.id)
         redis_client.delete(f"booking:soft_lock:{booking.id}")
         db.add(
             AuditLogModel(

@@ -19,6 +19,11 @@ class SlotLockCreateRequest(BaseModel):
         return self
 
 
+class PublicLockedRange(BaseModel):
+    start_time: datetime
+    end_time: datetime
+
+
 class SlotLockResponse(BaseModel):
     id: UUID
     branch_id: UUID

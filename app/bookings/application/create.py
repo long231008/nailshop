@@ -14,10 +14,12 @@ from app.bookings.application.exceptions import (
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.bookings.presentation.schemas import BookingCreateRequest
 from app.branches.infrastructure.models import LocationModel
+from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 from app.discounts.application.gift import find_gift_message
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import (
     is_closed_day,
+    last_booking_utc,
     opening_window_utc,
     shop_timezone,
     within_booking_horizon,
@@ -67,9 +69,12 @@ def _staff_is_free(db: Session, staff_id: UUID, start_time: datetime, end_time: 
     return clash is None
 
 
-def _within_opening_hours(start_time: datetime, end_time: datetime) -> bool:
-    open_utc, close_utc = opening_window_utc(start_time.astimezone(shop_timezone()).date())
-    return open_utc <= start_time and end_time <= close_utc
+def _within_booking_hours(start_time: datetime) -> bool:
+    """Starts are accepted from opening until the last-booking time; a long
+    treatment may then finish after closing."""
+    local_date = start_time.astimezone(shop_timezone()).date()
+    open_utc, _ = opening_window_utc(local_date)
+    return open_utc <= start_time <= last_booking_utc(local_date)
 
 
 def _overlaps_prepared_items(
@@ -177,9 +182,23 @@ def create_booking(
             duration_min += extension.extra_duration_min
             price += Decimal(str(extension.extra_price))
 
+        if item.custom_design_id is not None:
+            design = db.get(CustomDesignModel, item.custom_design_id)
+            if design is None or design.customer_id != customer_id:
+                raise InvalidBookingItemsError("Custom design not found")
+            if design.status != CustomDesignStatus.PRICED:
+                raise InvalidBookingItemsError(
+                    "This design has no accepted quote or is already booked"
+                )
+            if any(p.get("custom_design_id") == design.id for p in prepared_items):
+                raise InvalidBookingItemsError("This design is already in the booking")
+            # The agreed quote replaces the service's base price.
+            price = Decimal(str(design.estimated_price))
+            design.status = CustomDesignStatus.ACCEPTED
+
         end_time = start_time + timedelta(minutes=duration_min)
-        if not _within_opening_hours(start_time, end_time):
-            raise InvalidBookingItemsError("Bookings must fall within opening hours (09:00-18:00)")
+        if not _within_booking_hours(start_time):
+            raise InvalidBookingItemsError("Bookings start between 09:00 and 17:30")
         staff_id = _resolve_staff(
             db, payload.branch_id, item.staff_id, start_time, end_time, prepared_items
         )
@@ -189,6 +208,7 @@ def create_booking(
                 "service_id": service.id,
                 "service_extension_id": item.service_extension_id,
                 "staff_id": staff_id,
+                "custom_design_id": item.custom_design_id,
                 "start_time": start_time,
                 "end_time": end_time,
                 "duration_min": duration_min,

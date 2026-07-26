@@ -146,6 +146,118 @@ def test_cart_total_earns_gift_from_backend_rule(
         cleanup_records.append(("booking_details", detail["id"]))
 
 
+def test_cart_books_priced_design_at_quoted_price(
+    client,
+    admin_headers,
+    customer_headers,
+    customer_identity,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
+
+    design = CustomDesignModel(
+        customer_id=customer_identity["id"],
+        image_url="https://example.com/design.jpg",
+        description="Chrome french tips",
+        estimated_price=27.5,
+        status=CustomDesignStatus.PRICED,
+    )
+    db_session.add(design)
+    db_session.commit()
+    cleanup_records.append(("custom_designs", design.id))
+
+    payload = {
+        "branch_id": str(seeded_branch),
+        "items": [
+            {
+                "service_id": str(seeded_service),
+                "staff_id": str(seeded_staff["staff_id"]),
+                "start_time": seeded_shift["start"].isoformat(),
+                "custom_design_id": str(design.id),
+            }
+        ],
+    }
+    response = client.post("/app/bookings", json=payload, headers=customer_headers)
+
+    assert response.status_code == 201
+    body = response.json()
+    # The quote replaces the service's base price (20.0).
+    assert body["total_price"] == 27.5
+    cleanup_records.append(("bookings", body["id"]))
+    cleanup_records.append(("booking_details", body["details"][0]["id"]))
+
+    db_session.refresh(design)
+    assert design.status == CustomDesignStatus.ACCEPTED
+
+    # The same design cannot be booked twice.
+    retry_payload = {
+        "branch_id": str(seeded_branch),
+        "items": [
+            {
+                "service_id": str(seeded_service),
+                "staff_id": str(seeded_staff["staff_id"]),
+                "start_time": (seeded_shift["start"].replace(hour=13)).isoformat(),
+                "custom_design_id": str(design.id),
+            }
+        ],
+    }
+    retry = client.post("/app/bookings", json=retry_payload, headers=customer_headers)
+    assert retry.status_code == 400
+
+
+def test_cancelling_design_booking_releases_the_design(
+    client,
+    customer_headers,
+    customer_identity,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
+
+    design = CustomDesignModel(
+        customer_id=customer_identity["id"],
+        image_url="https://example.com/design2.jpg",
+        estimated_price=15.0,
+        status=CustomDesignStatus.PRICED,
+    )
+    db_session.add(design)
+    db_session.commit()
+    cleanup_records.append(("custom_designs", design.id))
+
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                    "custom_design_id": str(design.id),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    cancel = client.post(f"/app/bookings/{booking['id']}/cancel", headers=customer_headers)
+    assert cancel.status_code == 200
+
+    db_session.refresh(design)
+    assert design.status == CustomDesignStatus.PRICED
+
+
 def test_gift_preview_endpoint_is_public_and_matches_rules(
     client, admin_headers, seeded_branch, cleanup_records
 ):

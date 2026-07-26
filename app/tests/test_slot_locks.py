@@ -214,6 +214,37 @@ def test_booking_beyond_horizon_is_rejected(
     assert response.status_code == 400
 
 
+def test_public_endpoint_lists_branch_wide_locks_only(
+    client, admin_headers, seeded_staff, seeded_shift, cleanup_records
+):
+    branch_lock = client.post(
+        "/app/slot-locks",
+        json=_lock_payload(seeded_staff, seeded_shift, hours=1),
+        headers=admin_headers,
+    ).json()
+    cleanup_records.append(("slot_locks", branch_lock["id"]))
+
+    staff_payload = _lock_payload(seeded_staff, seeded_shift, staff_specific=True, hours=1)
+    staff_payload["start_time"] = (seeded_shift["start"] + timedelta(hours=3)).isoformat()
+    staff_payload["end_time"] = (seeded_shift["start"] + timedelta(hours=4)).isoformat()
+    staff_lock = client.post("/app/slot-locks", json=staff_payload, headers=admin_headers).json()
+    cleanup_records.append(("slot_locks", staff_lock["id"]))
+
+    # No auth required - this feeds the customer booking page.
+    response = client.get(
+        "/app/slot-locks/public",
+        params={
+            "branch_id": str(seeded_staff["branch_id"]),
+            "date": seeded_shift["start"].date().isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    ranges = response.json()
+    assert len(ranges) == 1
+    assert ranges[0]["start_time"].startswith(seeded_shift["start"].date().isoformat())
+
+
 def _next_sunday(from_dt):
     days_ahead = (6 - from_dt.weekday()) % 7 or 7
     return from_dt + timedelta(days=days_ahead)

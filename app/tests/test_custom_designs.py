@@ -19,6 +19,24 @@ def test_create_custom_design_uploads_file(client, customer_headers, cleanup_rec
     cleanup_records.append(("custom_designs", body["id"]))
 
 
+def test_description_only_request_is_accepted(client, customer_headers, cleanup_records):
+    response = client.post(
+        "/app/custom-designs",
+        headers=customer_headers,
+        data={"description": "Chrome french tips, no photo"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["image_url"] is None
+    assert body["description"] == "Chrome french tips, no photo"
+    cleanup_records.append(("custom_designs", body["id"]))
+
+
+def test_request_without_photo_or_description_is_rejected(client, customer_headers):
+    response = client.post("/app/custom-designs", headers=customer_headers, data={})
+    assert response.status_code == 400
+
+
 def test_set_custom_design_price(client, customer_headers, admin_headers, cleanup_records):
     create_response = client.post(
         "/app/custom-designs",

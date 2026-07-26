@@ -49,6 +49,17 @@ def start_of_year_utc(now: datetime | None = None) -> datetime:
     return day_bounds_utc(today_in_shop_tz(now).replace(month=1, day=1))[0]
 
 
+def last_booking_utc(target_date: date_type) -> datetime:
+    """The latest instant a booking may start on one local calendar day."""
+    tz = shop_timezone()
+    last_local = datetime.combine(
+        target_date,
+        time(hour=settings.SHOP_LAST_BOOKING_HOUR, minute=settings.SHOP_LAST_BOOKING_MINUTE),
+        tzinfo=tz,
+    )
+    return last_local.astimezone(timezone.utc)
+
+
 def is_closed_day(target_date: date_type) -> bool:
     """Sundays are always closed - Sunday visits are arranged privately via the
     salon's Facebook page, never through online booking."""

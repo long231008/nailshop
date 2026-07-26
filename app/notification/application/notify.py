@@ -90,3 +90,15 @@ def notify_deposit_failed(sender: NotificationSender, db: Session, customer_id: 
     if customer is None:
         return
     _send(sender, messages.deposit_failed_notification(customer.phone_number, customer.email))
+
+
+def notify_design_priced(
+    sender: NotificationSender, db: Session, customer_id: UUID, price: float
+) -> None:
+    customer = db.get(UserModel, customer_id)
+    if customer is None:
+        return
+    _send(
+        sender,
+        messages.design_priced_notification(customer.phone_number, customer.email, price),
+    )
