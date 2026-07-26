@@ -27,16 +27,19 @@ def find_available_slots(
     target_date: date_type,
     staff_id: UUID | None = None,
     service_extension_id: UUID | None = None,
+    duration_min: int | None = None,
 ) -> list[dict]:
     service = db.get(ServiceModel, service_id)
     if service is None:
         raise ServiceNotFoundError()
 
-    duration_min = service.duration_min
-    if service_extension_id is not None:
-        extension = db.get(ServiceExtensionModel, service_extension_id)
-        if extension is not None:
-            duration_min += extension.extra_duration_min
+    if duration_min is None:
+        # A cart of several services passes its combined duration instead.
+        duration_min = service.duration_min
+        if service_extension_id is not None:
+            extension = db.get(ServiceExtensionModel, service_extension_id)
+            if extension is not None:
+                duration_min += extension.extra_duration_min
 
     staff_query = db.query(StaffModel).filter(
         StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE

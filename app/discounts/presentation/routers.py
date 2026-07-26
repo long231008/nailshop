@@ -4,11 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.discounts.application.gift import find_gift_message
 from app.discounts.infrastructure.models import DiscountModel, DiscountType
 from app.discounts.presentation.schemas import (
     DiscountCreateRequest,
     DiscountResponse,
     DiscountUpdateRequest,
+    GiftPreviewResponse,
 )
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
@@ -73,6 +75,20 @@ def list_discounts(
     discounts = query.order_by(DiscountModel.created_at.desc()).offset(offset).limit(limit).all()
 
     return [_to_response(d) for d in discounts]
+
+
+@router.get("/gift-preview", response_model=GiftPreviewResponse)
+def gift_preview(
+    branch_id: UUID,
+    total: float = Query(gt=0),
+    db: Session = Depends(get_db),
+) -> GiftPreviewResponse:
+    """Public: whether a booking of this total at this branch earns a gift.
+
+    Purely informational - the authoritative decision is re-made by the backend
+    when the booking is created.
+    """
+    return GiftPreviewResponse(gift_message=find_gift_message(db, branch_id, total))
 
 
 @router.patch("/{discount_id}", response_model=DiscountResponse)

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.bookings.application.exceptions import (
@@ -14,7 +14,7 @@ from app.bookings.application.exceptions import (
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.bookings.presentation.schemas import BookingCreateRequest
 from app.branches.infrastructure.models import LocationModel
-from app.discounts.infrastructure.models import DiscountModel, DiscountType
+from app.discounts.application.gift import find_gift_message
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shifts.infrastructure.models import StaffRosterModel
 from app.staff.infrastructure.models import StaffModel, StaffStatus
@@ -22,7 +22,6 @@ from app.staff.infrastructure.models import StaffModel, StaffStatus
 logger = logging.getLogger(__name__)
 
 DAILY_LIMIT_MINUTES = 120
-GIFT_MESSAGE = "Congratulations! Your order qualifies for a free gift from our shop."
 # Kept in step with app.availability.application.slot_finder so a slot that was
 # offered is a slot that can actually be booked.
 BUFFER_MINUTES = 15
@@ -77,12 +76,30 @@ def _staff_is_on_shift(
     return shift is not None
 
 
+def _overlaps_prepared_items(
+    prepared_items: list[dict], staff_id: UUID, start_time: datetime, end_time: datetime
+) -> bool:
+    """Overlap among items of the SAME request.
+
+    Back-to-back services in one visit are fine (no buffer between them - it is
+    the same customer in the chair), but the same staff member cannot do two
+    services at literally the same time.
+    """
+    return any(
+        item["staff_id"] == staff_id
+        and item["start_time"] < end_time
+        and item["end_time"] > start_time
+        for item in prepared_items
+    )
+
+
 def _resolve_staff(
     db: Session,
     branch_id: UUID,
     requested_staff_id: UUID | None,
     start_time: datetime,
     end_time: datetime,
+    prepared_items: list[dict],
 ) -> UUID:
     """Pick the staff member who will do the work, or reject the slot."""
     candidates = db.query(StaffModel).filter(
@@ -98,34 +115,20 @@ def _resolve_staff(
             raise StaffConflictError()
         if not _staff_is_free(db, staff.id, start_time, end_time):
             raise StaffConflictError()
+        if _overlaps_prepared_items(prepared_items, staff.id, start_time, end_time):
+            raise StaffConflictError()
         return staff.id
 
     # No preference: give the customer whoever is genuinely available.
     for staff in candidates.order_by(StaffModel.created_at).all():
-        if _staff_is_on_shift(db, staff.id, start_time, end_time) and _staff_is_free(
-            db, staff.id, start_time, end_time
+        if (
+            _staff_is_on_shift(db, staff.id, start_time, end_time)
+            and _staff_is_free(db, staff.id, start_time, end_time)
+            and not _overlaps_prepared_items(prepared_items, staff.id, start_time, end_time)
         ):
             return staff.id
 
     raise StaffConflictError()
-
-
-def _find_gift_message(db: Session, branch_id: UUID, total_price: Decimal) -> str | None:
-    now = datetime.now(timezone.utc)
-    gift_rule = (
-        db.query(DiscountModel)
-        .filter(
-            DiscountModel.discount_type == DiscountType.GIFT,
-            DiscountModel.is_active.is_(True),
-            DiscountModel.value < total_price,
-            or_(DiscountModel.branch_id.is_(None), DiscountModel.branch_id == branch_id),
-            or_(DiscountModel.start_at.is_(None), DiscountModel.start_at <= now),
-            or_(DiscountModel.end_at.is_(None), DiscountModel.end_at >= now),
-        )
-        .order_by(DiscountModel.value.desc())
-        .first()
-    )
-    return GIFT_MESSAGE if gift_rule is not None else None
 
 
 def create_booking(
@@ -171,7 +174,9 @@ def create_booking(
             price += Decimal(str(extension.extra_price))
 
         end_time = start_time + timedelta(minutes=duration_min)
-        staff_id = _resolve_staff(db, payload.branch_id, item.staff_id, start_time, end_time)
+        staff_id = _resolve_staff(
+            db, payload.branch_id, item.staff_id, start_time, end_time, prepared_items
+        )
 
         prepared_items.append(
             {
@@ -216,7 +221,7 @@ def create_booking(
     db.commit()
     db.refresh(booking)
 
-    gift_message = _find_gift_message(db, payload.branch_id, total_price)
+    gift_message = find_gift_message(db, payload.branch_id, total_price)
     if gift_message is not None:
         logger.info(
             "Customer %s qualifies for a shop gift (booking %s total %s)",

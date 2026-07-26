@@ -26,6 +26,10 @@ class DiscountCreateRequest(BaseModel):
         return self
 
 
+class GiftPreviewResponse(BaseModel):
+    gift_message: str | None
+
+
 class DiscountUpdateRequest(BaseModel):
     name: str | None = None
     is_active: bool | None = None

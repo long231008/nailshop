@@ -27,6 +27,7 @@ from app.bookings.infrastructure.models import (
 )
 from app.branches.infrastructure.models import LocationModel
 from app.custom_designs.infrastructure.models import CustomDesignModel
+from app.discounts.infrastructure.models import DiscountModel, DiscountType
 from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import SessionLocal
@@ -267,6 +268,20 @@ def _get_or_create_customer(db, phone: str) -> UserModel:
 
 
 ADMIN_PHONE = "07000000000"
+GIFT_DISCOUNT_NAME = "Free gift for bookings over £50"
+GIFT_THRESHOLD = 50
+
+
+def _seed_gift_discount(db) -> None:
+    if db.query(DiscountModel).filter_by(name=GIFT_DISCOUNT_NAME).first() is None:
+        db.add(
+            DiscountModel(
+                name=GIFT_DISCOUNT_NAME,
+                discount_type=DiscountType.GIFT,
+                value=GIFT_THRESHOLD,
+            )
+        )
+        db.flush()
 
 
 def _get_or_create_admin(db) -> UserModel:
@@ -378,6 +393,7 @@ def seed() -> None:
         _get_or_create_customer(db, "07922222222"),
     ]
     _get_or_create_admin(db)
+    _seed_gift_discount(db)
 
     db.add(
         CustomDesignModel(
