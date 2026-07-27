@@ -2,6 +2,7 @@ import logging
 
 from app.notification.domain.notification import Notification, mask_destination
 from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.providers import build_live_sender
 from app.shared.infrastructure.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -38,15 +39,18 @@ class NullNotificationSender(NotificationSender):
 _SENDERS = {
     "console": ConsoleNotificationSender,
     "null": NullNotificationSender,
+    "live": build_live_sender,
 }
 
-_sender: NotificationSender = _SENDERS.get(settings.NOTIFICATION_BACKEND, NullNotificationSender)()
-
-if settings.NOTIFICATION_BACKEND not in _SENDERS:
+_factory = _SENDERS.get(settings.NOTIFICATION_BACKEND)
+if _factory is None:
     logger.warning(
         "Unknown NOTIFICATION_BACKEND %r, falling back to 'null'",
         settings.NOTIFICATION_BACKEND,
     )
+    _factory = NullNotificationSender
+
+_sender: NotificationSender = _factory()
 
 
 def get_notification_sender() -> NotificationSender:

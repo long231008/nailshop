@@ -1,13 +1,29 @@
-# Requires an ingress controller (e.g. ingress-nginx) installed in the cluster.
+# Requires an ingress controller (e.g. ingress-nginx) installed in the cluster,
+# and cert-manager with a ClusterIssuer named "letsencrypt-prod" for TLS.
+#
+# Replace api.nailzinc.co.uk with your real API domain, and make sure the same
+# domain appears in ALLOWED_HOSTS (see k8s/configmap.yaml).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: nailshop-api
   namespace: nailshop
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Everything this API carries - one-time codes, tokens, phone numbers -
+    # must never travel in clear text.
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Design photo uploads are capped at 8 MB by the app itself.
+    nginx.ingress.kubernetes.io/proxy-body-size: 8m
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.nailzinc.co.uk
+      secretName: nailshop-api-tls
   rules:
-    - host: nailshop.local
+    - host: api.nailzinc.co.uk
       http:
         paths:
           - path: /

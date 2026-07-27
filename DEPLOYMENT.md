@@ -60,13 +60,50 @@ VITE_FACEBOOK_PAGE_URL=https://m.me/YourPage
   signs everyone out, which is the intended emergency action.
 - `PAYMENT_WEBHOOK_SECRET`: must match the payment provider's configuration, or
   every webhook is rejected as unsigned.
-- `NOTIFICATION_BACKEND=null` until a real SMS/email provider is wired up.
-  Never `console` in production — that writes one-time codes into the logs.
+- `NOTIFICATION_BACKEND=live` once the providers below are configured. Never
+  `console` in production — that writes one-time codes into the logs — and
+  `null` means customers never receive their codes at all.
 - Cloudinary credentials: with them set, design photos go to Cloudinary; without
   them, photos are written to the container's `uploads/` directory, which is
   lost on restart unless a volume is mounted.
 
-## 4. Database
+## 4. Message delivery
+
+Customers register with either a phone number or an email address, and every
+message — one-time codes, deposit links, booking confirmations, design quotes —
+goes back on that same channel. Set `NOTIFICATION_BACKEND=live` and configure
+whichever providers you need; a channel with no provider is logged as
+undelivered rather than failing the request.
+
+**SMS — Twilio.** From the Twilio console take the Account SID and Auth Token,
+then either buy a number or register an alphanumeric Sender ID:
+
+```
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=...
+TWILIO_SENDER=Nailzinc          # or +447700900000
+SMS_COUNTRY_CODE=+44
+```
+
+An alphanumeric sender ID shows the salon's name instead of a strange number,
+which matters for codes people are asked to trust. UK registration takes a few
+days; a purchased number works immediately. Numbers are stored as customers
+type them (`07488566218`) and converted to E.164 (`+447488566218`) on the way
+out, using `SMS_COUNTRY_CODE`.
+
+**Email — SendGrid.** Create an API key with Mail Send permission and verify
+the sending domain (without domain verification, mail lands in spam):
+
+```
+SENDGRID_API_KEY=SG....
+EMAIL_FROM_ADDRESS=hello@nailzinc.co.uk
+EMAIL_FROM_NAME=Nailzinc
+```
+
+Send yourself a code from the login page after deploying — it is the fastest
+end-to-end check that the whole chain works.
+
+## 5. Database
 
 - Run `alembic upgrade head` as part of the release, before the new code serves
   traffic.
@@ -75,7 +112,7 @@ VITE_FACEBOOK_PAGE_URL=https://m.me/YourPage
 - Tests write to the database they are pointed at. Give CI its own
   `DATABASE_URL` so a stray run can never touch production data.
 
-## 5. After deploying
+## 6. After deploying
 
 Check the startup log for `INSECURE FOR PRODUCTION` lines, then confirm from
 outside:

@@ -41,7 +41,20 @@ class Settings(BaseSettings):
     BOOKING_HORIZON_DAYS: int = 365
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.
+    # "live" delivers for real: SMS to phone numbers, email to addresses.
     NOTIFICATION_BACKEND: str = "null"
+    # Twilio (SMS). SENDER may be a purchased number or an approved alphanumeric
+    # sender ID such as "Nailzinc".
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_SENDER: str = ""
+    # Local numbers are stored as customers type them ("07..."); carriers need
+    # E.164 ("+447...").
+    SMS_COUNTRY_CODE: str = "+44"
+    # SendGrid (email).
+    SENDGRID_API_KEY: str = ""
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "Nailzinc"
     # Only trust X-Forwarded-For for rate limiting when running behind a proxy you control.
     TRUST_PROXY_HEADERS: bool = False
     SQL_ECHO: bool = False
@@ -72,6 +85,8 @@ class Settings(BaseSettings):
             problems.append("ALLOWED_HOSTS=*")
         if self.NOTIFICATION_BACKEND == "console":
             problems.append("NOTIFICATION_BACKEND=console (OTP codes go to the log)")
+        if self.NOTIFICATION_BACKEND == "null":
+            problems.append("NOTIFICATION_BACKEND=null (nothing is actually delivered)")
         if len(self.JWT_SECRET_KEY) < 32:
             problems.append("JWT_SECRET_KEY is shorter than 32 characters")
         return problems
