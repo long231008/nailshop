@@ -9,6 +9,7 @@ from app.notification.infrastructure.providers import (
     DeliveryError,
     RoutingNotificationSender,
     SendGridEmailSender,
+    SmtpEmailSender,
     TwilioSmsSender,
 )
 from app.shared.infrastructure.config.settings import settings
@@ -105,7 +106,7 @@ class Recorder:
         self.sent.append(notification)
 
 
-def test_routing_prefers_the_channel_the_customer_signed_up_with():
+def test_routing_uses_whichever_channel_the_customer_has():
     sms, email = Recorder(), Recorder()
     router = RoutingNotificationSender(sms, email)
 
@@ -114,6 +115,85 @@ def test_routing_prefers_the_channel_the_customer_signed_up_with():
 
     assert len(sms.sent) == 1
     assert len(email.sent) == 1
+
+
+def test_routing_prefers_free_email_when_the_customer_has_both():
+    sms, email = Recorder(), Recorder()
+    router = RoutingNotificationSender(sms, email, prefer_email=True)
+
+    router.send(
+        Notification(subject="a", body="b", phone_number="07000000000", email="g@example.com")
+    )
+
+    assert len(email.sent) == 1
+    assert sms.sent == []
+
+
+def test_routing_can_be_told_to_prefer_sms():
+    sms, email = Recorder(), Recorder()
+    router = RoutingNotificationSender(sms, email, prefer_email=False)
+
+    router.send(
+        Notification(subject="a", body="b", phone_number="07000000000", email="g@example.com")
+    )
+
+    assert len(sms.sent) == 1
+    assert email.sent == []
+
+
+def test_routing_falls_back_when_the_preferred_channel_has_no_provider():
+    sms = Recorder()
+    router = RoutingNotificationSender(sms, None, prefer_email=True)
+
+    router.send(
+        Notification(subject="a", body="b", phone_number="07000000000", email="g@example.com")
+    )
+
+    assert len(sms.sent) == 1
+
+
+def test_smtp_sends_email(monkeypatch):
+    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(settings, "SMTP_PORT", 587)
+    monkeypatch.setattr(settings, "SMTP_USERNAME", "user")
+    monkeypatch.setattr(settings, "SMTP_PASSWORD", "pass")
+    monkeypatch.setattr(settings, "EMAIL_FROM_ADDRESS", "hello@nailzinc.co.uk")
+    monkeypatch.setattr(settings, "EMAIL_FROM_NAME", "Nailzinc")
+
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            sent["host"] = host
+            sent["port"] = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def starttls(self):
+            sent["tls"] = True
+
+        def login(self, username, password):
+            sent["login"] = (username, password)
+
+        def send_message(self, message):
+            sent["message"] = message
+
+    monkeypatch.setattr(providers.smtplib, "SMTP", FakeSMTP)
+
+    SmtpEmailSender().send(
+        Notification(subject="Your code", body="123456", email="guest@example.com")
+    )
+
+    assert sent["host"] == "smtp.example.com"
+    assert sent["tls"] is True
+    assert sent["login"] == ("user", "pass")
+    assert sent["message"]["To"] == "guest@example.com"
+    assert sent["message"]["Subject"] == "Your code"
+    assert "Nailzinc" in sent["message"]["From"]
 
 
 def test_routing_without_a_provider_does_not_raise(caplog):

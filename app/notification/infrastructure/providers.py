@@ -1,10 +1,15 @@
-"""Real delivery: SMS through Twilio, email through SendGrid.
+"""Real delivery: SMS through Twilio, email through SendGrid or plain SMTP.
 
-Both are plain REST calls made with `requests`, which the project already
-depends on - no extra SDKs to keep up to date.
+The HTTP providers are called with `requests`, which the project already depends
+on, and SMTP uses the standard library - no extra SDKs to keep up to date.
+Email has a free path (SMTP against a free tier); SMS does not, because carriers
+charge per message, so email is preferred when a customer has both.
 """
 
 import logging
+import smtplib
+from email.message import EmailMessage
+from email.utils import formataddr
 
 import requests
 
@@ -78,24 +83,73 @@ class SendGridEmailSender(NotificationSender):
         logger.info("Email sent to %s", mask_destination(notification.email))
 
 
+class SmtpEmailSender(NotificationSender):
+    """Email over plain SMTP.
+
+    Works with any provider that hands out SMTP credentials - including the free
+    tiers of Brevo, Resend and Mailgun, or a Gmail app password - so the salon
+    can send email without a paid plan.
+    """
+
+    def send(self, notification: Notification) -> None:
+        if not notification.email:
+            raise DeliveryError("no email address on this notification")
+
+        message = EmailMessage()
+        message["Subject"] = notification.subject
+        message["From"] = formataddr((settings.EMAIL_FROM_NAME, settings.EMAIL_FROM_ADDRESS))
+        message["To"] = notification.email
+        message.set_content(notification.body)
+
+        try:
+            with smtplib.SMTP(
+                settings.SMTP_HOST, settings.SMTP_PORT, timeout=TIMEOUT_SECONDS
+            ) as server:
+                if settings.SMTP_USE_TLS:
+                    server.starttls()
+                if settings.SMTP_USERNAME:
+                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                server.send_message(message)
+        except smtplib.SMTPException as exc:
+            raise DeliveryError(f"SMTP delivery failed: {exc}") from exc
+
+        logger.info("Email sent to %s", mask_destination(notification.email))
+
+
+def smtp_configured() -> bool:
+    return bool(settings.SMTP_HOST and settings.EMAIL_FROM_ADDRESS)
+
+
 class RoutingNotificationSender(NotificationSender):
     """Reaches people on the channel they signed up with.
 
     Customers register with either a phone number or an email address, so the
-    notification itself says which way to go. Anything without a configured
-    provider is logged as undelivered rather than silently dropped.
+    notification itself says which way to go. When both are known, email wins by
+    default: it is free where SMS is charged per message. Anything without a
+    configured provider is logged as undelivered rather than silently dropped.
     """
 
-    def __init__(self, sms: NotificationSender | None, email: NotificationSender | None):
+    def __init__(
+        self,
+        sms: NotificationSender | None,
+        email: NotificationSender | None,
+        prefer_email: bool | None = None,
+    ):
         self._sms = sms
         self._email = email
+        self._prefer_email = (
+            settings.PREFER_EMAIL_OVER_SMS if prefer_email is None else prefer_email
+        )
 
     def send(self, notification: Notification) -> None:
-        if notification.phone_number and self._sms is not None:
-            self._sms.send(notification)
-            return
-        if notification.email and self._email is not None:
+        can_sms = bool(notification.phone_number) and self._sms is not None
+        can_email = bool(notification.email) and self._email is not None
+
+        if can_email and (self._prefer_email or not can_sms):
             self._email.send(notification)
+            return
+        if can_sms:
+            self._sms.send(notification)
             return
 
         logger.warning(
@@ -107,13 +161,19 @@ class RoutingNotificationSender(NotificationSender):
 
 def build_live_sender() -> NotificationSender:
     sms = TwilioSmsSender() if twilio_configured() else None
-    email = SendGridEmailSender() if sendgrid_configured() else None
+
+    # SendGrid's API when there is a key, otherwise SMTP - which covers the
+    # free providers.
+    if sendgrid_configured():
+        email = SendGridEmailSender()
+    elif smtp_configured():
+        email = SmtpEmailSender()
+    else:
+        email = None
 
     if sms is None:
-        logger.warning("NOTIFICATION_BACKEND=live but Twilio is not configured: no SMS will go out")
+        logger.warning("NOTIFICATION_BACKEND=live without Twilio: no SMS will go out")
     if email is None:
-        logger.warning(
-            "NOTIFICATION_BACKEND=live but SendGrid is not configured: no email will go out"
-        )
+        logger.warning("NOTIFICATION_BACKEND=live without SendGrid or SMTP: no email will go out")
 
     return RoutingNotificationSender(sms, email)

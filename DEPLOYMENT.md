@@ -75,8 +75,40 @@ goes back on that same channel. Set `NOTIFICATION_BACKEND=live` and configure
 whichever providers you need; a channel with no provider is logged as
 undelivered rather than failing the request.
 
-**SMS — Twilio.** From the Twilio console take the Account SID and Auth Token,
-then either buy a number or register an alphanumeric Sender ID:
+### Email — free, and enough on its own
+
+Any provider that hands out SMTP credentials works. Free tiers comfortably
+cover a salon's volume (a few hundred messages a month):
+
+| Provider | Free allowance | SMTP host | Notes |
+| --- | --- | --- | --- |
+| Brevo | ~300/day | `smtp-relay.brevo.com:587` | Most generous; verify the domain |
+| Resend | ~3,000/month | `smtp.resend.com:587` | Simplest setup |
+| Mailgun | ~100/day | `smtp.mailgun.org:587` | Asks for a card |
+| Gmail | ~500/day | `smtp.gmail.com:587` | Needs an **app password**, not the account password. Zero setup, but mail shows the Gmail address and deliverability is weaker — fine to start, move to a real provider before opening properly |
+
+```
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=587
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+SMTP_USE_TLS=true
+EMAIL_FROM_ADDRESS=hello@nailzinc.co.uk
+EMAIL_FROM_NAME=Nailzinc
+```
+
+Verify your sending domain with the provider (SPF/DKIM records). Without it,
+codes land in spam — which looks exactly like the app being broken.
+
+Using SendGrid's API instead? Set `SENDGRID_API_KEY` and leave `SMTP_HOST`
+empty; the API takes priority.
+
+### SMS — Twilio, and it is never free
+
+Carriers charge per message, so no provider gives away SMS. UK messages run
+about £0.04 each; roughly £4 per 100 logins. **SMS is optional**: leave the
+Twilio settings blank and the app runs on email alone, which is why the login
+page offers both phone and email.
 
 ```
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -91,14 +123,8 @@ days; a purchased number works immediately. Numbers are stored as customers
 type them (`07488566218`) and converted to E.164 (`+447488566218`) on the way
 out, using `SMS_COUNTRY_CODE`.
 
-**Email — SendGrid.** Create an API key with Mail Send permission and verify
-the sending domain (without domain verification, mail lands in spam):
-
-```
-SENDGRID_API_KEY=SG....
-EMAIL_FROM_ADDRESS=hello@nailzinc.co.uk
-EMAIL_FROM_NAME=Nailzinc
-```
+With `PREFER_EMAIL_OVER_SMS=true` (the default) a customer who has both is
+reached by email, so SMS is only spent on people who gave nothing else.
 
 Send yourself a code from the login page after deploying — it is the fastest
 end-to-end check that the whole chain works.

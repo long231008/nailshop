@@ -51,10 +51,19 @@ class Settings(BaseSettings):
     # Local numbers are stored as customers type them ("07..."); carriers need
     # E.164 ("+447...").
     SMS_COUNTRY_CODE: str = "+44"
-    # SendGrid (email).
+    # Email. Either SendGrid's API, or plain SMTP - which works with the free
+    # tiers of Brevo, Resend, Mailgun, or even a Gmail app password.
     SENDGRID_API_KEY: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_USE_TLS: bool = True
     EMAIL_FROM_ADDRESS: str = ""
     EMAIL_FROM_NAME: str = "Nailzinc"
+    # SMS costs money per message, email is effectively free. When a customer
+    # has both, reach them by email unless told otherwise.
+    PREFER_EMAIL_OVER_SMS: bool = True
     # Only trust X-Forwarded-For for rate limiting when running behind a proxy you control.
     TRUST_PROXY_HEADERS: bool = False
     SQL_ECHO: bool = False

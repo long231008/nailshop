@@ -25,10 +25,15 @@ data:
   TRUST_PROXY_HEADERS: "true"
   SQL_ECHO: "false"
 
-  # Real delivery: SMS to phone numbers, email to addresses.
+  # Real delivery. Email is free and covers the whole app on its own; SMS is
+  # optional and charged per message, so email wins when a customer has both.
   NOTIFICATION_BACKEND: "live"
-  SMS_COUNTRY_CODE: "+44"
+  SMTP_HOST: "smtp-relay.brevo.com"
+  SMTP_PORT: "587"
+  SMTP_USE_TLS: "true"
   EMAIL_FROM_ADDRESS: "hello@nailzinc.co.uk"
   EMAIL_FROM_NAME: "Nailzinc"
+  PREFER_EMAIL_OVER_SMS: "true"
+  SMS_COUNTRY_CODE: "+44"
 
   SHOP_TIMEZONE: "Europe/London"
