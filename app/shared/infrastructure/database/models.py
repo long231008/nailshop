@@ -1,7 +1,9 @@
+from app.allocation.infrastructure.models import AllocationRunModel  # noqa: F401
 from app.audit_log.infrastructure.models import AuditLogModel  # noqa: F401
 from app.auth.infrastructure.models import UserModel  # noqa: F401
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel  # noqa: F401
 from app.branches.infrastructure.models import LocationModel  # noqa: F401
+from app.capability.infrastructure.models import StaffCapabilityModel  # noqa: F401
 from app.custom_designs.infrastructure.models import CustomDesignModel  # noqa: F401
 from app.discounts.infrastructure.models import DiscountModel, DiscountType  # noqa: F401
 from app.queue.infrastructure.models import QueueTicketModel  # noqa: F401

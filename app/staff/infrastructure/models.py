@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -38,6 +38,10 @@ class StaffModel(Base):
     # Delegated by an admin: lets this staff member lock/unlock time slots at
     # their branch (e.g. when a slot is already full with walk-ins).
     can_lock_slots: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Weekly days off as comma-separated weekday numbers (0=Monday .. 6=Sunday).
+    # Feeds the capacity ledger: a day off removes the tech from that day's lanes.
+    days_off: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    max_hours_week: Mapped[int] = mapped_column(Integer, nullable=False, default=40)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

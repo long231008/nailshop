@@ -37,7 +37,7 @@ def test_availability_offers_1730_even_for_long_services(
     )
 
     assert response.status_code == 200
-    slots = response.json()
+    slots = response.json()["slots"]
     assert slots
     last_slot_start = datetime.fromisoformat(slots[-1]["start_time"])
     assert last_slot_start == last_booking_utc(seeded_shift["start"].date())

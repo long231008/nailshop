@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime, timezone
 
 from app.bookings.infrastructure.models import BookingModel, BookingStatus
+from app.shared.infrastructure.clock import today_in_shop_tz
 from app.webhooks.infrastructure.models import (
     PaymentTransactionModel,
     PaymentTransactionStatus,
@@ -13,7 +13,8 @@ def _create_booking(db_session, cleanup_records, customer_id, branch_id):
     booking = BookingModel(
         customer_id=customer_id,
         branch_id=branch_id,
-        booking_date=datetime.now(timezone.utc).date(),
+        # The dashboard's "today" follows the shop's wall clock, not UTC.
+        booking_date=today_in_shop_tz(),
         status=BookingStatus.COMPLETED,
         total_price=30.0,
         final_price=33.0,

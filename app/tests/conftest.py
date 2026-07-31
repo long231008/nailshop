@@ -1,6 +1,6 @@
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -18,6 +18,7 @@ from app.custom_designs.infrastructure.storage import get_design_storage
 from app.main import app
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.cache.redis_client import get_redis
+from app.shared.infrastructure.clock import shop_timezone, today_in_shop_tz
 from app.shared.infrastructure.database.session import SessionLocal
 from app.shared.infrastructure.rate_limit import limiter
 from app.shifts.infrastructure.models import StaffRosterModel
@@ -183,11 +184,14 @@ def seeded_staff(db_session, cleanup_records, seeded_branch):
 
 @pytest.fixture
 def seeded_shift(db_session, cleanup_records, seeded_staff):
-    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
-    if tomorrow.weekday() == 6:  # Sundays are closed - use Monday instead
-        tomorrow += timedelta(days=1)
-    start = tomorrow.replace(hour=9, minute=0, second=0, microsecond=0)
-    end = tomorrow.replace(hour=17, minute=0, second=0, microsecond=0)
+    # Two shop-local days out: the booking window for tomorrow closes at 21:00
+    # tonight, so "+1 day" would make every test run after 21:00 flaky.
+    target = today_in_shop_tz() + timedelta(days=2)
+    if target.weekday() == 6:  # Sundays are closed - use Monday instead
+        target += timedelta(days=1)
+    tz = shop_timezone()
+    start = datetime.combine(target, time(hour=10), tzinfo=tz).astimezone(timezone.utc)
+    end = datetime.combine(target, time(hour=17), tzinfo=tz).astimezone(timezone.utc)
     shift = StaffRosterModel(
         staff_id=seeded_staff["staff_id"],
         branch_id=seeded_staff["branch_id"],

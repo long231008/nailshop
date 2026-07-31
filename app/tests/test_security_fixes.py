@@ -350,11 +350,8 @@ def test_webhook_failed_payment_is_recorded_but_not_counted(
 
 
 def test_availability_never_offers_past_slots(client, seeded_staff, seeded_service):
-    from datetime import datetime, timezone
+    from app.shared.infrastructure.clock import today_in_shop_tz
 
-    from app.shared.infrastructure.clock import is_closed_day, shop_timezone, today_in_shop_tz
-
-    now = datetime.now(timezone.utc)
     response = client.get(
         "/app/availability",
         params={
@@ -365,11 +362,9 @@ def test_availability_never_offers_past_slots(client, seeded_staff, seeded_servi
     )
 
     assert response.status_code == 200
-    slots = response.json()
-    for slot in slots:
-        start = datetime.fromisoformat(slot["start_time"])
-        assert start > now
-    # Only assert there IS availability while a good chunk of the day remains -
-    # after closing time (or on a closed Sunday) an empty list is the correct answer.
-    if now.astimezone(shop_timezone()).hour < 16 and not is_closed_day(today_in_shop_tz()):
-        assert slots, "expected some availability for the rest of the day"
+    body = response.json()
+    # Same-day booking closed at 21:00 yesterday (capacity model): today never
+    # offers online slots - walk-ins are seated at the desk - so a past time
+    # can never be offered either.
+    assert body["window"] in ("closed", "closed_day")
+    assert body["slots"] == []

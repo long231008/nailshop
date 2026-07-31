@@ -65,7 +65,7 @@ def test_cart_books_services_back_to_back_with_same_staff(
         cleanup_records.append(("booking_details", detail["id"]))
 
 
-def test_cart_rejects_same_staff_at_same_time(
+def test_cart_items_are_chained_back_to_back_server_side(
     client,
     customer_headers,
     db_session,
@@ -75,6 +75,8 @@ def test_cart_rejects_same_staff_at_same_time(
     seeded_shift,
     cleanup_records,
 ):
+    """One customer, one chair: the server lays the visit out sequentially from
+    the first item's start, so two items 'at the same time' cannot clash."""
     second = _second_service(db_session, cleanup_records, seeded_branch)
     start = seeded_shift["start"]
 
@@ -95,7 +97,14 @@ def test_cart_rejects_same_staff_at_same_time(
     }
     response = client.post("/app/bookings", json=payload, headers=customer_headers)
 
-    assert response.status_code == 409
+    assert response.status_code == 201
+    body = response.json()
+    details = sorted(body["details"], key=lambda d: d["start_time"])
+    assert details[0]["end_time"] == details[1]["start_time"]
+
+    cleanup_records.append(("bookings", body["id"]))
+    for detail in body["details"]:
+        cleanup_records.append(("booking_details", detail["id"]))
 
 
 def test_cart_total_earns_gift_from_backend_rule(
@@ -288,21 +297,23 @@ def test_gift_preview_endpoint_is_public_and_matches_rules(
     assert under.json()["gift_message"] is None
 
 
-def test_availability_accepts_cart_duration_override(
-    client, seeded_staff, seeded_service, seeded_shift
+def test_availability_accepts_whole_cart_service_ids(
+    client, db_session, cleanup_records, seeded_staff, seeded_service, seeded_shift
 ):
+    second = _second_service(db_session, cleanup_records, seeded_staff["branch_id"])
     params = {
         "branch_id": str(seeded_staff["branch_id"]),
-        "service_id": str(seeded_service),
+        "service_ids": f"{seeded_service},{second.id}",
         "date": seeded_shift["start"].date().isoformat(),
-        "duration_min": 75,
     }
     response = client.get("/app/availability", params=params)
 
     assert response.status_code == 200
-    slots = response.json()
-    assert slots
-    for slot in slots:
+    body = response.json()
+    assert body["window"] == "open"
+    assert body["slots"]
+    # 30' + 45' menu minutes, each snapped to the 15' grid = 75' per visit.
+    for slot in body["slots"]:
         start = datetime.fromisoformat(slot["start_time"])
         end = datetime.fromisoformat(slot["end_time"])
         assert (end - start) == timedelta(minutes=75)

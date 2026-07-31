@@ -266,7 +266,8 @@ def test_upcoming_pending_spans_all_dates(
     cleanup_records.append(("bookings", near["id"]))
     cleanup_records.append(("booking_details", near["details"][0]["id"]))
 
-    far_start = seeded_shift["start"] + timedelta(days=150)
+    # Still days out, but inside the 14-day booking horizon.
+    far_start = seeded_shift["start"] + timedelta(days=7)
     if far_start.weekday() == 6:
         far_start += timedelta(days=1)
     far = client.post(

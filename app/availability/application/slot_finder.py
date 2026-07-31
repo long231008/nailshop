@@ -1,142 +1,177 @@
+"""Advance-booking slot finder on the capacity ledger (doc 3.3b).
+
+Any-tech requests list the times where every leg of the visit still fits under
+the lane caps - no technician is named or reserved; that happens at the nightly
+close. A named-tech request checks that one tech's personal timeline instead,
+using their real minutes from the capability matrix.
+"""
+
 from datetime import date as date_type
 from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
-from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
-from app.shared.infrastructure.clock import (
-    is_closed_day,
-    last_booking_utc,
-    now_utc,
-    opening_window_utc,
-    within_booking_horizon,
+from app.availability.application.capacity import (
+    BookingWindow,
+    CapacityLedger,
+    booking_window_state,
+    is_window_free,
+    rare_service_cap,
+    staff_timeline_busy,
 )
+from app.capability.application.matrix import (
+    branch_matrix_configured,
+    ceil_to_grid,
+    eligible_staff,
+    planning_minutes,
+    real_minutes,
+)
+from app.services.infrastructure.models import ServiceModel
+from app.shared.infrastructure.clock import last_booking_utc, opening_window_utc
 from app.slot_locks.application.locks import locks_overlapping
-from app.staff.infrastructure.models import StaffModel, StaffStatus
+from app.staff.infrastructure.models import StaffModel
 
-BUFFER_MINUTES = 15
 SLOT_STEP_MINUTES = 15
-# Nobody can book a slot that starts in the next few minutes anyway.
-MIN_LEAD_MINUTES = 15
 
 
 class ServiceNotFoundError(Exception):
     pass
 
 
-def _align_to_grid(moment):
-    """Round up to the next quarter-hour so offered times read 09:00, 09:15, ..."""
-    if (moment.minute % SLOT_STEP_MINUTES, moment.second, moment.microsecond) == (0, 0, 0):
-        return moment
-    floored = moment.replace(
-        minute=moment.minute - moment.minute % SLOT_STEP_MINUTES, second=0, microsecond=0
-    )
-    return floored + timedelta(minutes=SLOT_STEP_MINUTES)
+class BookingWindowClosedError(Exception):
+    def __init__(self, state: str):
+        self.state = state
+        super().__init__(state)
+
+
+def build_visit_legs(
+    db: Session,
+    branch_id: UUID,
+    services: list[ServiceModel],
+    day: date_type,
+    staff_id: UUID | None,
+) -> list[dict] | None:
+    """The visit as sequential legs with planned durations (grid-snapped).
+
+    Any-tech legs hold the cautious planning duration (slowest eligible tech);
+    named-tech legs hold that tech's real minutes. None = not sellable that day.
+    """
+    legs = []
+    offset = 0
+    for service in services:
+        if staff_id is not None:
+            minutes = real_minutes(db, staff_id, service.id)
+            if minutes is None:
+                if branch_matrix_configured(db, branch_id):
+                    return None  # the named tech cannot do this service - never assign
+                minutes = service.duration_min  # matrix not filled in yet
+            minutes = ceil_to_grid(minutes)
+        else:
+            minutes = planning_minutes(db, branch_id, service.id, day)
+            if minutes is None:
+                return None  # nobody expected that day can do it - don't sell
+        legs.append(
+            {
+                "service_id": service.id,
+                "skill_group": service.skill_group,
+                "offset_min": offset,
+                "duration_min": minutes,
+                "buffer_min": service.buffer_after_min,
+            }
+        )
+        offset += minutes
+    return legs
+
+
+def place_legs(legs: list[dict], visit_start) -> list[dict]:
+    placed = []
+    for leg in legs:
+        start = visit_start + timedelta(minutes=leg["offset_min"])
+        end = start + timedelta(minutes=leg["duration_min"])
+        placed.append(
+            {
+                "service_id": leg["service_id"],
+                "skill_group": leg["skill_group"],
+                "start": start,
+                "end": end + timedelta(minutes=leg["buffer_min"]),
+                "service_end": end,
+            }
+        )
+    return placed
 
 
 def find_available_slots(
     db: Session,
     branch_id: UUID,
-    service_id: UUID,
+    service_ids: list[UUID],
     target_date: date_type,
     staff_id: UUID | None = None,
-    service_extension_id: UUID | None = None,
-    duration_min: int | None = None,
 ) -> list[dict]:
-    """Free slots inside the shop's opening hours.
-
-    The calendar is open every day within the booking horizon; what limits it is
-    existing bookings and explicit slot locks, not rosters.
-    """
-    service = db.get(ServiceModel, service_id)
-    if service is None:
+    services = [db.get(ServiceModel, service_id) for service_id in service_ids]
+    if any(service is None for service in services):
         raise ServiceNotFoundError()
 
-    if not within_booking_horizon(target_date) or is_closed_day(target_date):
+    state = booking_window_state(target_date)
+    if state != BookingWindow.OPEN:
+        raise BookingWindowClosedError(state)
+
+    legs = build_visit_legs(db, branch_id, services, target_date, staff_id)
+    if legs is None:
         return []
-
-    if duration_min is None:
-        # A cart of several services passes its combined duration instead.
-        duration_min = service.duration_min
-        if service_extension_id is not None:
-            extension = db.get(ServiceExtensionModel, service_extension_id)
-            if extension is not None:
-                duration_min += extension.extra_duration_min
-
-    staff_query = db.query(StaffModel).filter(
-        StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE
-    )
-    if staff_id is not None:
-        staff_query = staff_query.filter(StaffModel.id == staff_id)
-    staff_list = staff_query.all()
+    total_minutes = legs[-1]["offset_min"] + legs[-1]["duration_min"]
 
     open_utc, _close_utc = opening_window_utc(target_date)
     last_start = last_booking_utc(target_date)
-    # A treatment starting at the last accepted time may run past closing, so the
-    # working span extends to cover it.
-    span_end = last_start + timedelta(minutes=duration_min)
-    # Past slots are never offered: today's window starts at "now + lead time".
-    earliest_start = max(open_utc, now_utc() + timedelta(minutes=MIN_LEAD_MINUTES))
-    if earliest_start > last_start:
-        return []
 
-    locks = locks_overlapping(db, branch_id, open_utc, span_end)
+    # Manual locks close published times exactly as locked - no buffer around
+    # them. A branch-wide lock blocks any-tech sales; a staff lock only blocks
+    # that member's personal timeline.
+    day_locks = locks_overlapping(
+        db, branch_id, open_utc, last_start + timedelta(minutes=total_minutes)
+    )
+
+    def _locked(placed, for_staff_id) -> bool:
+        for leg in placed:
+            for lock in day_locks:
+                if lock.staff_id is not None and lock.staff_id != for_staff_id:
+                    continue
+                if lock.start_time < leg["service_end"] and lock.end_time > leg["start"]:
+                    return True
+        return False
+
+    if staff_id is not None:
+        staff = db.get(StaffModel, staff_id)
+        if staff is None or staff.branch_id != branch_id:
+            return []
+        busy = staff_timeline_busy(db, staff_id, target_date)
+        checker = lambda placed: not _locked(placed, staff_id) and all(  # noqa: E731
+            is_window_free(busy, leg["start"], leg["end"]) for leg in placed
+        )
+    else:
+        ledger = CapacityLedger(db, branch_id, target_date)
+        service_caps = {
+            service.id: rare_service_cap(
+                len(eligible_staff(db, branch_id, service.id, target_date))
+            )
+            for service in services
+        }
+        checker = lambda placed: not _locked(placed, None) and ledger.fits(  # noqa: E731
+            placed, service_caps
+        )
 
     slots = []
-    for staff in staff_list:
-        busy_windows = []
-
-        details = (
-            db.query(BookingDetailModel)
-            .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
-            .filter(
-                BookingDetailModel.staff_id == staff.id,
-                BookingModel.status.notin_([BookingStatus.CANCELLED, BookingStatus.NO_SHOW]),
-                BookingDetailModel.start_time < span_end,
-                BookingDetailModel.end_time > open_utc,
+    cursor = open_utc
+    step = timedelta(minutes=SLOT_STEP_MINUTES)
+    while cursor <= last_start:
+        placed = place_legs(legs, cursor)
+        if checker(placed):
+            slots.append(
+                {
+                    "staff_id": staff_id,
+                    "start_time": cursor,
+                    "end_time": cursor + timedelta(minutes=total_minutes),
+                }
             )
-            .all()
-        )
-        for detail in details:
-            busy_windows.append(
-                (
-                    detail.start_time - timedelta(minutes=BUFFER_MINUTES),
-                    detail.end_time + timedelta(minutes=BUFFER_MINUTES),
-                )
-            )
-        # Locks close the slot exactly as published - no extra buffer around them.
-        for lock in locks:
-            if lock.staff_id is None or lock.staff_id == staff.id:
-                busy_windows.append((lock.start_time, lock.end_time))
-
-        busy_windows.sort()
-
-        cursor = earliest_start
-        free_windows = []
-        for busy_start, busy_end in busy_windows:
-            if busy_end <= cursor or busy_start >= span_end:
-                continue
-            if busy_start > cursor:
-                free_windows.append((cursor, min(busy_start, span_end)))
-            cursor = max(cursor, busy_end)
-        if cursor < span_end:
-            free_windows.append((cursor, span_end))
-
-        for win_start, win_end in free_windows:
-            slot_start = _align_to_grid(win_start)
-            while (
-                slot_start <= last_start and slot_start + timedelta(minutes=duration_min) <= win_end
-            ):
-                slots.append(
-                    {
-                        "staff_id": staff.id,
-                        "start_time": slot_start,
-                        "end_time": slot_start + timedelta(minutes=duration_min),
-                    }
-                )
-                slot_start += timedelta(minutes=SLOT_STEP_MINUTES)
-
-    slots.sort(key=lambda s: s["start_time"])
+        cursor += step
     return slots

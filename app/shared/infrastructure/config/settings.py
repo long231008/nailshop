@@ -38,7 +38,14 @@ class Settings(BaseSettings):
     # closing - that's the salon's explicit choice.
     SHOP_LAST_BOOKING_HOUR: int = 17
     SHOP_LAST_BOOKING_MINUTE: int = 30
-    BOOKING_HORIZON_DAYS: int = 365
+    # Advance bookings live on the capacity ledger (design doc 3.3b): day D takes
+    # bookings until BOOKING_CLOSE_HOUR local time on D-1, then freezes so the
+    # nightly allocation can assign technicians to a demand that no longer moves.
+    BOOKING_HORIZON_DAYS: int = 14
+    BOOKING_CLOSE_HOUR: int = 21
+    # Share of expected technicians that may be sold per 15' slot; the remainder
+    # is the walk-in lane plus the staffing-surprise cushion.
+    CAP_FILL: float = 0.85
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.
     # "live" delivers for real: SMS to phone numbers, email to addresses.

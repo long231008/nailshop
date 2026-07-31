@@ -50,7 +50,7 @@ def test_admin_lock_hides_slots_and_blocks_booking(
             "service_id": str(seeded_service),
             "date": locked_start.date().isoformat(),
         },
-    ).json()
+    ).json()["slots"]
     for slot in slots:
         assert not _overlaps(slot, locked_start, locked_end)
 
@@ -176,22 +176,32 @@ def test_staff_specific_lock_leaves_other_staff_available(
     cleanup_records.append(("slot_locks", lock.json()["id"]))
 
     locked_start = seeded_shift["start"]
-    slots = client.get(
+    locked_end = locked_start + timedelta(hours=2)
+
+    # The locked member's personal timeline hides the locked window...
+    locked_member_slots = client.get(
         "/app/availability",
         params={
             "branch_id": str(seeded_branch),
             "service_id": str(seeded_service),
+            "staff_id": str(seeded_staff["staff_id"]),
             "date": locked_start.date().isoformat(),
         },
-    ).json()
+    ).json()["slots"]
+    for slot in locked_member_slots:
+        assert not _overlaps(slot, locked_start, locked_end)
 
-    staff_ids_offered = {slot["staff_id"] for slot in slots}
-    assert str(other_staff.id) in staff_ids_offered
-
-    locked_end = locked_start + timedelta(hours=2)
-    for slot in slots:
-        if slot["staff_id"] == str(seeded_staff["staff_id"]):
-            assert not _overlaps(slot, locked_start, locked_end)
+    # ...while the other member still offers it.
+    other_member_slots = client.get(
+        "/app/availability",
+        params={
+            "branch_id": str(seeded_branch),
+            "service_id": str(seeded_service),
+            "staff_id": str(other_staff.id),
+            "date": locked_start.date().isoformat(),
+        },
+    ).json()["slots"]
+    assert any(_overlaps(slot, locked_start, locked_end) for slot in other_member_slots)
 
 
 def test_booking_beyond_horizon_is_rejected(
@@ -263,7 +273,7 @@ def test_sundays_have_no_availability(client, seeded_staff, seeded_service, seed
     )
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"window": "closed_day", "slots": []}
 
 
 def test_sunday_booking_is_rejected_with_facebook_hint(
@@ -290,13 +300,32 @@ def test_sunday_booking_is_rejected_with_facebook_hint(
     assert "Facebook" in response.json()["detail"]
 
 
-def test_year_round_calendar_has_slots_months_ahead(
+def test_booking_horizon_limits_the_calendar(
     client, seeded_staff, seeded_service, seeded_shift
 ):
+    # Within the horizon: open, and slots sit on the quarter-hour grid.
+    near = seeded_shift["start"].date()
+    response = client.get(
+        "/app/availability",
+        params={
+            "branch_id": str(seeded_staff["branch_id"]),
+            "service_id": str(seeded_service),
+            "date": near.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["window"] == "open"
+    assert body["slots"], "expected open slots within the booking horizon"
+    for slot in body["slots"]:
+        minute = int(slot["start_time"][14:16])
+        assert minute % 15 == 0
+
+    # Beyond the horizon (14 days): the window reports too_far, no slots.
     months_ahead = (seeded_shift["start"] + timedelta(days=180)).date()
     if months_ahead.weekday() == 6:  # Sundays are closed
         months_ahead += timedelta(days=1)
-    response = client.get(
+    far_response = client.get(
         "/app/availability",
         params={
             "branch_id": str(seeded_staff["branch_id"]),
@@ -304,10 +333,5 @@ def test_year_round_calendar_has_slots_months_ahead(
             "date": months_ahead.isoformat(),
         },
     )
-    assert response.status_code == 200
-    slots = response.json()
-    assert slots, "expected open slots half a year ahead"
-    # Slots sit on the quarter-hour grid.
-    for slot in slots:
-        minute = int(slot["start_time"][14:16])
-        assert minute % 15 == 0
+    assert far_response.status_code == 200
+    assert far_response.json() == {"window": "too_far", "slots": []}

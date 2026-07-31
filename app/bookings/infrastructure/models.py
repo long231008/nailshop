@@ -3,7 +3,7 @@ from datetime import date as date_
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -78,6 +78,9 @@ class BookingDetailModel(Base):
     staff_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("staff.id"), nullable=True
     )
+    # True when the CUSTOMER asked for this technician by name (doc 3.3b): such
+    # legs are pinned - reallocation must never swap them without a phone call.
+    staff_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     custom_design_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("custom_designs.id"), nullable=True
     )

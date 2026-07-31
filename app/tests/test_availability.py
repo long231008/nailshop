@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 
 def test_availability_returns_slots_within_shift(
@@ -16,10 +16,13 @@ def test_availability_returns_slots_within_shift(
     )
 
     assert response.status_code == 200
-    slots = response.json()
+    body = response.json()
+    assert body["window"] == "open"
+    slots = body["slots"]
     assert len(slots) > 0
+    # Capacity mode: no technician is named until the nightly allocation.
     for slot in slots:
-        assert slot["staff_id"] == str(seeded_staff["staff_id"])
+        assert slot["staff_id"] is None
 
     first_slot_start = slots[0]["start_time"]
     assert first_slot_start.startswith(target_date.isoformat())
@@ -59,13 +62,13 @@ def test_availability_excludes_booked_slot_with_buffer(
         },
     )
 
-    slots = response.json()
+    slots = response.json()["slots"]
     booked_start = seeded_shift["start"]
     booked_end = booked_start + timedelta(minutes=30)
     for slot in slots:
-        slot_start = slot["start_time"]
-        slot_end = slot["end_time"]
-        assert not (slot_start < booked_end.isoformat() and slot_end > booked_start.isoformat())
+        slot_start = datetime.fromisoformat(slot["start_time"])
+        slot_end = datetime.fromisoformat(slot["end_time"])
+        assert not (slot_start < booked_end and slot_end > booked_start)
 
 
 def test_availability_unknown_service_returns_404(client, seeded_staff, seeded_shift):

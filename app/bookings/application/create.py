@@ -1,11 +1,28 @@
+"""Create an advance booking on the capacity ledger (doc 3.3b).
+
+The customer commits to *salon + time + services + price*. Any-tech items keep
+staff_id NULL and hold the cautious planning duration; the nightly allocation
+names the technician and shrinks each leg to that tech's real minutes. Items
+naming a technician are checked against - and written onto - that tech's
+personal timeline immediately, with their real minutes from the matrix.
+"""
+
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from app.availability.application.capacity import (
+    BookingWindow,
+    CapacityLedger,
+    booking_window_state,
+    is_window_free,
+    rare_service_cap,
+    staff_timeline_busy,
+)
 from app.bookings.application.exceptions import (
     DailyBookingLimitExceededError,
     InvalidBookingItemsError,
@@ -14,16 +31,17 @@ from app.bookings.application.exceptions import (
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.bookings.presentation.schemas import BookingCreateRequest
 from app.branches.infrastructure.models import LocationModel
+from app.capability.application.matrix import (
+    branch_matrix_configured,
+    ceil_to_grid,
+    eligible_staff,
+    planning_minutes,
+    real_minutes,
+)
 from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 from app.discounts.application.gift import find_gift_message
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
-from app.shared.infrastructure.clock import (
-    is_closed_day,
-    last_booking_utc,
-    opening_window_utc,
-    shop_timezone,
-    within_booking_horizon,
-)
+from app.shared.infrastructure.clock import last_booking_utc, opening_window_utc, shop_timezone
 from app.slot_locks.application.locks import is_interval_locked
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
@@ -33,9 +51,6 @@ DAILY_LIMIT_MINUTES = 120
 # Custom designs are nail art: their quote may only ever be spent on a nail art
 # service, never on an unrelated (and more expensive) treatment.
 NAIL_ART_CATEGORY = "addon"
-# Kept in step with app.availability.application.slot_finder so a slot that was
-# offered is a slot that can actually be booked.
-BUFFER_MINUTES = 15
 ACTIVE_BOOKING_STATUSES = [
     BookingStatus.PENDING,
     BookingStatus.APPROVED,
@@ -43,12 +58,24 @@ ACTIVE_BOOKING_STATUSES = [
     BookingStatus.COMPLETED,
 ]
 
+WINDOW_MESSAGES = {
+    BookingWindow.CLOSED: (
+        "Bookings for this day have closed (they close at 21:00 the evening "
+        "before). Please walk in, or pick a later day."
+    ),
+    BookingWindow.TOO_FAR: "This date is beyond the booking horizon",
+    BookingWindow.CLOSED_DAY: (
+        "We are closed on Sundays. For a Sunday appointment, please message us "
+        "on our Facebook page."
+    ),
+}
+
 
 def _lock_branch(db: Session, branch_id: UUID) -> None:
     """Serialise booking creation per branch.
 
-    Checking for a clash and inserting the row are two statements; without this lock
-    two concurrent requests both see a free slot and both write to it.
+    Checking capacity and inserting the rows are separate statements; without
+    this lock two concurrent requests both see a free lane and both take it.
     """
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key)::bigint)"),
@@ -56,115 +83,36 @@ def _lock_branch(db: Session, branch_id: UUID) -> None:
     )
 
 
-def _staff_is_free(db: Session, staff_id: UUID, start_time: datetime, end_time: datetime) -> bool:
-    buffer = timedelta(minutes=BUFFER_MINUTES)
-    clash = (
-        db.query(BookingDetailModel.id)
-        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
-        .filter(
-            BookingDetailModel.staff_id == staff_id,
-            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
-            BookingDetailModel.start_time < end_time + buffer,
-            BookingDetailModel.end_time > start_time - buffer,
-        )
-        .first()
-    )
-    return clash is None
-
-
-def _within_booking_hours(start_time: datetime) -> bool:
-    """Starts are accepted from opening until the last-booking time; a long
-    treatment may then finish after closing."""
-    local_date = start_time.astimezone(shop_timezone()).date()
-    open_utc, _ = opening_window_utc(local_date)
-    return open_utc <= start_time <= last_booking_utc(local_date)
-
-
-def _overlaps_prepared_items(
-    prepared_items: list[dict], staff_id: UUID, start_time: datetime, end_time: datetime
-) -> bool:
-    """Overlap among items of the SAME request.
-
-    Back-to-back services in one visit are fine (no buffer between them - it is
-    the same customer in the chair), but the same staff member cannot do two
-    services at literally the same time.
-    """
-    return any(
-        item["staff_id"] == staff_id
-        and item["start_time"] < end_time
-        and item["end_time"] > start_time
-        for item in prepared_items
-    )
-
-
-def _resolve_staff(
-    db: Session,
-    branch_id: UUID,
-    requested_staff_id: UUID | None,
-    start_time: datetime,
-    end_time: datetime,
-    prepared_items: list[dict],
-) -> UUID:
-    """Pick the staff member who will do the work, or reject the slot."""
-    candidates = db.query(StaffModel).filter(
-        StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE
-    )
-    if requested_staff_id is not None:
-        staff = candidates.filter(StaffModel.id == requested_staff_id).first()
-        if staff is None:
-            raise InvalidBookingItemsError(
-                "The requested staff member does not work at this branch"
-            )
-        if is_interval_locked(db, branch_id, staff.id, start_time, end_time):
-            raise StaffConflictError()
-        if not _staff_is_free(db, staff.id, start_time, end_time):
-            raise StaffConflictError()
-        if _overlaps_prepared_items(prepared_items, staff.id, start_time, end_time):
-            raise StaffConflictError()
-        return staff.id
-
-    # No preference: give the customer whoever is genuinely available.
-    for staff in candidates.order_by(StaffModel.created_at).all():
-        if (
-            not is_interval_locked(db, branch_id, staff.id, start_time, end_time)
-            and _staff_is_free(db, staff.id, start_time, end_time)
-            and not _overlaps_prepared_items(prepared_items, staff.id, start_time, end_time)
-        ):
-            return staff.id
-
-    raise StaffConflictError()
-
-
 def create_booking(
     db: Session, customer_id: UUID, payload: BookingCreateRequest
 ) -> tuple[BookingModel, str | None]:
-    now = datetime.now(timezone.utc)
-    booking_date = payload.items[0].start_time.astimezone(timezone.utc).date()
+    booking_start = payload.items[0].start_time.astimezone(timezone.utc)
+    booking_date = booking_start.astimezone(shop_timezone()).date()
 
     if db.get(LocationModel, payload.branch_id) is None:
         raise InvalidBookingItemsError("Branch not found")
 
+    window = booking_window_state(booking_date)
+    if window != BookingWindow.OPEN:
+        raise InvalidBookingItemsError(WINDOW_MESSAGES[window])
+
+    open_utc, _ = opening_window_utc(booking_date)
+    if not (open_utc <= booking_start <= last_booking_utc(booking_date)):
+        raise InvalidBookingItemsError("Bookings start between 09:00 and 17:30")
+
     _lock_branch(db, payload.branch_id)
 
+    ledger = CapacityLedger(db, payload.branch_id, booking_date)
+    timelines: dict[UUID, list] = {}
+
     prepared_items = []
+    capacity_legs = []
+    service_caps: dict[UUID, int] = {}
     total_duration = 0
     total_price = Decimal("0")
-
-    if not within_booking_horizon(booking_date):
-        raise InvalidBookingItemsError("Bookings can be made up to 12 months in advance")
-    if is_closed_day(booking_date):
-        raise InvalidBookingItemsError(
-            "We are closed on Sundays. For a Sunday appointment, please message us "
-            "on our Facebook page."
-        )
+    cursor = booking_start
 
     for item in payload.items:
-        start_time = item.start_time.astimezone(timezone.utc)
-        if start_time < now:
-            raise InvalidBookingItemsError("Bookings cannot be made in the past")
-        if start_time.date() != booking_date:
-            raise InvalidBookingItemsError("All items in a booking must be on the same day")
-
         service = db.get(ServiceModel, item.service_id)
         if service is None:
             raise InvalidBookingItemsError(f"Service {item.service_id} not found")
@@ -173,8 +121,8 @@ def create_booking(
                 f"Service {item.service_id} is not offered at this branch"
             )
 
-        duration_min = service.duration_min
         price = Decimal(str(service.base_price))
+        extra_minutes = 0
 
         if item.service_extension_id is not None:
             extension = db.get(ServiceExtensionModel, item.service_extension_id)
@@ -182,7 +130,7 @@ def create_booking(
                 raise InvalidBookingItemsError(
                     f"Service extension {item.service_extension_id} is invalid for this service"
                 )
-            duration_min += extension.extra_duration_min
+            extra_minutes = extension.extra_duration_min
             price += Decimal(str(extension.extra_price))
 
         if item.custom_design_id is not None:
@@ -203,18 +151,78 @@ def create_booking(
             price = Decimal(str(design.estimated_price))
             design.status = CustomDesignStatus.ACCEPTED
 
-        end_time = start_time + timedelta(minutes=duration_min)
-        if not _within_booking_hours(start_time):
-            raise InvalidBookingItemsError("Bookings start between 09:00 and 17:30")
-        staff_id = _resolve_staff(
-            db, payload.branch_id, item.staff_id, start_time, end_time, prepared_items
-        )
+        if item.staff_id is not None:
+            # Named technician: real minutes, personal timeline (doc 1.1 rule 1).
+            staff = (
+                db.query(StaffModel)
+                .filter(
+                    StaffModel.id == item.staff_id,
+                    StaffModel.branch_id == payload.branch_id,
+                    StaffModel.status == StaffStatus.ACTIVE,
+                )
+                .first()
+            )
+            if staff is None:
+                raise InvalidBookingItemsError(
+                    "The requested staff member does not work at this branch"
+                )
+            minutes = real_minutes(db, staff.id, service.id)
+            if minutes is None:
+                if branch_matrix_configured(db, payload.branch_id):
+                    raise InvalidBookingItemsError(
+                        "The requested staff member does not offer this service"
+                    )
+                minutes = service.duration_min  # matrix not filled in yet
+            duration_min = ceil_to_grid(minutes + extra_minutes)
+            start_time = cursor
+            end_time = start_time + timedelta(minutes=duration_min)
+            hold_end = end_time + timedelta(minutes=service.buffer_after_min)
+            if item.staff_id not in timelines:
+                timelines[item.staff_id] = staff_timeline_busy(db, item.staff_id, booking_date)
+            if is_interval_locked(db, payload.branch_id, staff.id, start_time, end_time):
+                raise StaffConflictError()
+            if not is_window_free(timelines[item.staff_id], start_time, hold_end):
+                raise StaffConflictError()
+            timelines[item.staff_id].append((start_time, hold_end))
+            timelines[item.staff_id].sort()
+            staff_id = staff.id
+        else:
+            # Any-tech: hold a lane with the cautious planning duration; the
+            # nightly allocation picks the tech and shrinks the leg (doc 4.3).
+            minutes = planning_minutes(db, payload.branch_id, service.id, booking_date)
+            if minutes is None:
+                raise InvalidBookingItemsError(
+                    f"'{service.name}' is not available on this day"
+                )
+            duration_min = ceil_to_grid(minutes + extra_minutes)
+            start_time = cursor
+            end_time = start_time + timedelta(minutes=duration_min)
+            if is_interval_locked(db, payload.branch_id, None, start_time, end_time):
+                raise StaffConflictError()
+            capacity_legs.append(
+                {
+                    "service_id": service.id,
+                    "skill_group": service.skill_group,
+                    "start": start_time,
+                    "end": end_time + timedelta(minutes=service.buffer_after_min),
+                }
+            )
+            service_caps[service.id] = rare_service_cap(
+                len(eligible_staff(db, payload.branch_id, service.id, booking_date))
+            )
+            staff_id = None
+
+        # Every leg must still *start* within booking hours; a long visit may
+        # then run past closing - that's the salon's explicit choice.
+        if start_time > last_booking_utc(booking_date):
+            raise InvalidBookingItemsError("This visit would run past closing time")
 
         prepared_items.append(
             {
                 "service_id": service.id,
                 "service_extension_id": item.service_extension_id,
                 "staff_id": staff_id,
+                "staff_requested": item.staff_id is not None,
                 "custom_design_id": item.custom_design_id,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -224,6 +232,12 @@ def create_booking(
         )
         total_duration += duration_min
         total_price += price
+        cursor = end_time  # items run back-to-back: one customer, one chair
+
+    if capacity_legs and not ledger.fits(capacity_legs, service_caps):
+        raise InvalidBookingItemsError(
+            "This time no longer has room - please pick another time"
+        )
 
     existing_minutes = (
         db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))
