@@ -1,3 +1,4 @@
+from app.allocation.infrastructure.assignments import StaffDayAssignmentModel  # noqa: F401
 from app.allocation.infrastructure.models import AllocationRunModel  # noqa: F401
 from app.audit_log.infrastructure.models import AuditLogModel  # noqa: F401
 from app.auth.infrastructure.models import UserModel  # noqa: F401

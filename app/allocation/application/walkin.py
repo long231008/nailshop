@@ -11,14 +11,14 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.availability.application.capacity import ACTIVE_BOOKING_STATUSES, staff_timeline_busy
-from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
-from app.capability.application.matrix import (
-    branch_matrix_configured,
-    ceil_to_grid,
-    is_available,
-    load_matrix,
+from app.allocation.application.roster import expected_staff
+from app.availability.application.capacity import (
+    ACTIVE_BOOKING_STATUSES,
+    matrix_configured_for,
+    staff_timeline_busy,
 )
+from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
+from app.capability.application.matrix import ceil_to_grid, load_matrix
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import (
     day_bounds_utc,
@@ -26,7 +26,6 @@ from app.shared.infrastructure.clock import (
     opening_window_utc,
     today_in_shop_tz,
 )
-from app.staff.infrastructure.models import StaffModel, StaffStatus
 
 GRID_MINUTES = 15
 GUARD_MINUTES = 10  # cushion before the next appointment (doc 3.6)
@@ -82,18 +81,13 @@ def find_walkin_options(db: Session, branch_id: UUID, service_id: UUID) -> list[
     deadline = now + timedelta(minutes=MAX_WAIT_MINUTES)
 
     matrix = load_matrix(db)
-    configured = branch_matrix_configured(db, branch_id)
+    # Today's techs at this branch, per the roster fixed at last night's close.
+    staff_list = expected_staff(db, branch_id, today)
+    configured = matrix_configured_for(staff_list, matrix)
     turns = _today_turns(db, branch_id)
 
     options = []
-    staff_list = (
-        db.query(StaffModel)
-        .filter(StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE)
-        .all()
-    )
     for staff in staff_list:
-        if not is_available(staff, today):
-            continue
         minutes = matrix.get(staff.id, {}).get(service_id)
         if minutes is None:
             if configured:

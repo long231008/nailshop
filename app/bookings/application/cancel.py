@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.allocation.application.roster import release_pin_if_unused
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.bookings.application.exceptions import (
     BookingNotFoundError,
@@ -11,7 +12,7 @@ from app.bookings.application.exceptions import (
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
-from app.shared.infrastructure.clock import now_utc
+from app.shared.infrastructure.clock import now_utc, shop_timezone
 
 
 def release_designs(db: Session, booking_id) -> None:
@@ -59,7 +60,24 @@ def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingM
         )
 
     booking.status = BookingStatus.CANCELLED
+    # The session runs with autoflush=False: push the CANCELLED status now so
+    # the pin-release query below no longer counts this booking as active.
+    db.flush()
     release_designs(db, booking.id)
+    # Cancelling the last named booking of (tech, day) releases the exclusive
+    # pin, so other salons may claim the technician again (doc 3.3b).
+    named_details = (
+        db.query(BookingDetailModel)
+        .filter(
+            BookingDetailModel.booking_id == booking.id,
+            BookingDetailModel.staff_requested.is_(True),
+            BookingDetailModel.staff_id.isnot(None),
+        )
+        .all()
+    )
+    for detail in named_details:
+        day = detail.start_time.astimezone(shop_timezone()).date()
+        release_pin_if_unused(db, detail.staff_id, day)
     db.add(
         AuditLogModel(
             actor_user_id=customer_id,

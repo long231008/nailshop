@@ -21,7 +21,8 @@ class MatrixServiceItem(BaseModel):
 
 class MatrixStaffItem(BaseModel):
     id: UUID
-    branch_id: UUID
+    # Home branch preference only - technicians belong to the chain.
+    branch_id: UUID | None
     display_name: str
     status: str
     days_off: str

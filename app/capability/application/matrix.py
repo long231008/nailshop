@@ -53,45 +53,6 @@ def load_matrix(db: Session) -> dict[UUID, dict[UUID, int]]:
     return matrix
 
 
-def branch_matrix_configured(db: Session, branch_id: UUID) -> bool:
-    """Has the owner filled in any capability cell for this branch's techs?
-
-    Until they do, the scheduler runs in legacy mode: menu durations, every
-    active tech assumed able to do every service. The moment the first cell is
-    saved, the matrix becomes the single source of truth (v3.2)."""
-    return (
-        db.query(StaffCapabilityModel.id)
-        .join(StaffModel, StaffCapabilityModel.staff_id == StaffModel.id)
-        .filter(StaffModel.branch_id == branch_id)
-        .first()
-        is not None
-    )
-
-
-def eligible_staff(
-    db: Session, branch_id: UUID, service_id: UUID, day: date_type
-) -> list[StaffModel]:
-    """Active techs of the branch expected in on `day` who can do the service."""
-    if not branch_matrix_configured(db, branch_id):
-        rows = (
-            db.query(StaffModel)
-            .filter(StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE)
-            .all()
-        )
-        return [staff for staff in rows if is_available(staff, day)]
-    rows = (
-        db.query(StaffModel)
-        .join(StaffCapabilityModel, StaffCapabilityModel.staff_id == StaffModel.id)
-        .filter(
-            StaffModel.branch_id == branch_id,
-            StaffModel.status == StaffStatus.ACTIVE,
-            StaffCapabilityModel.service_id == service_id,
-        )
-        .all()
-    )
-    return [staff for staff in rows if is_available(staff, day)]
-
-
 def real_minutes(db: Session, staff_id: UUID, service_id: UUID) -> int | None:
     cell = (
         db.query(StaffCapabilityModel)
@@ -102,24 +63,6 @@ def real_minutes(db: Session, staff_id: UUID, service_id: UUID) -> int | None:
         .first()
     )
     return cell.minutes if cell else None
-
-
-def planning_minutes(db: Session, branch_id: UUID, service_id: UUID, day: date_type) -> int | None:
-    """Cautious any-tech hold: the slowest eligible tech's real minutes, snapped
-    to the grid. None when nobody expected that day can do the service - the
-    service must not be sold for that day (doc 1.1 rule 3)."""
-    staff_list = eligible_staff(db, branch_id, service_id, day)
-    if not staff_list:
-        return None
-    if not branch_matrix_configured(db, branch_id):
-        service = db.get(ServiceModel, service_id)
-        return ceil_to_grid(service.duration_min)
-    minutes = [
-        m
-        for staff in staff_list
-        if (m := real_minutes(db, staff.id, service_id)) is not None
-    ]
-    return ceil_to_grid(max(minutes)) if minutes else None
 
 
 def get_matrix_payload(db: Session) -> dict:

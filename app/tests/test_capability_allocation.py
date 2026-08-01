@@ -221,3 +221,161 @@ def test_capacity_blocks_overselling_one_tech_branch(
     assert "no longer has room" in second.json()["detail"]
 
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"]])
+
+
+# --- Chain staff: exclusive pins + Step A ------------------------------------
+
+
+@pytest.fixture
+def second_branch(db_session, cleanup_records):
+    from app.branches.infrastructure.models import LocationModel
+
+    branch = LocationModel(name=f"Branch2-{uuid.uuid4().hex[:6]}", address="2 Test St")
+    db_session.add(branch)
+    db_session.commit()
+    cleanup_records.append(("locations", branch.id))
+    return branch.id
+
+
+def _named_payload(branch_id, service_id, staff_id, start):
+    return {
+        "branch_id": str(branch_id),
+        "items": [
+            {
+                "service_id": str(service_id),
+                "staff_id": str(staff_id),
+                "start_time": start.isoformat(),
+            }
+        ],
+    }
+
+
+def test_pin_is_exclusive_first_booking_wins(
+    client,
+    customer_headers,
+    other_customer_headers,
+    seeded_branch,
+    second_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """A named booking pins the tech to that salon for the day; a second salon
+    asking for the same tech the same day is refused (doc 3.3b)."""
+    first = client.post(
+        "/app/bookings",
+        json=_named_payload(
+            seeded_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
+        ),
+        headers=customer_headers,
+    )
+    assert first.status_code == 201, first.text
+    cleanup_records.append(("bookings", first.json()["id"]))
+    cleanup_records.append(("booking_details", first.json()["details"][0]["id"]))
+
+    second = client.post(
+        "/app/bookings",
+        json=_named_payload(
+            second_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
+        ),
+        headers=other_customer_headers,
+    )
+    assert second.status_code == 400
+    assert "another salon" in second.json()["detail"]
+
+
+def test_cancelling_last_named_booking_releases_the_pin(
+    client,
+    customer_headers,
+    other_customer_headers,
+    seeded_branch,
+    second_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    first = client.post(
+        "/app/bookings",
+        json=_named_payload(
+            seeded_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
+        ),
+        headers=customer_headers,
+    )
+    assert first.status_code == 201, first.text
+    booking = first.json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    cancel = client.post(f"/app/bookings/{booking['id']}/cancel", headers=customer_headers)
+    assert cancel.status_code == 200
+
+    # The pin is gone: the other salon can now claim the tech for that day.
+    second = client.post(
+        "/app/bookings",
+        json=_named_payload(
+            second_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
+        ),
+        headers=other_customer_headers,
+    )
+    assert second.status_code == 201, second.text
+    cleanup_records.append(("bookings", second.json()["id"]))
+    cleanup_records.append(("booking_details", second.json()["details"][0]["id"]))
+
+
+def test_step_a_places_every_available_tech_and_respects_pins(
+    client,
+    customer_headers,
+    db_session,
+    seeded_branch,
+    second_branch,
+    seeded_service,
+    seeded_staff,
+    second_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    from sqlalchemy import text
+
+    from app.allocation.application.roster import solve_day
+    from app.allocation.infrastructure.assignments import (
+        AssignmentSource,
+        StaffDayAssignmentModel,
+    )
+
+    day = seeded_shift["start"].date()
+
+    # A named booking at the SECOND branch pins the seeded tech there.
+    booking = client.post(
+        "/app/bookings",
+        json=_named_payload(
+            second_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
+        ),
+        headers=customer_headers,
+    )
+    assert booking.status_code == 201, booking.text
+    cleanup_records.append(("bookings", booking.json()["id"]))
+    cleanup_records.append(("booking_details", booking.json()["details"][0]["id"]))
+
+    try:
+        solve_day(db_session, day)
+
+        rows = {
+            a.staff_id: a
+            for a in db_session.query(StaffDayAssignmentModel)
+            .filter(StaffDayAssignmentModel.day == day)
+            .all()
+        }
+        pinned = rows[seeded_staff["staff_id"]]
+        assert pinned.branch_id == second_branch
+        assert pinned.source == AssignmentSource.PIN
+        # The second tech got a branch too (auto), so every floor is covered.
+        assert rows[second_staff.id].source == AssignmentSource.AUTO
+    finally:
+        # solve_day touches every active tech in the dev database - remove the
+        # whole day's assignments so no side effects outlive the test.
+        db_session.execute(
+            text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day}
+        )
+        db_session.commit()

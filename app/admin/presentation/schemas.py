@@ -31,7 +31,8 @@ class SlotLockPermissionResponse(BaseModel):
 
 
 class StaffCreateRequest(BaseModel):
-    branch_id: UUID
+    # Home branch preference only - technicians belong to the chain.
+    branch_id: UUID | None = None
     display_name: str = Field(min_length=1, max_length=255)
     # Either attach an existing user, or create one from a phone number/email.
     user_id: UUID | None = None
@@ -48,7 +49,7 @@ class StaffCreateRequest(BaseModel):
 class StaffCreatedResponse(BaseModel):
     staff_id: UUID
     user_id: UUID
-    branch_id: UUID
+    branch_id: UUID | None
     display_name: str
     status: str
 
@@ -110,7 +111,8 @@ class UserBookingItem(BaseModel):
 
 
 class GrantStaffRequest(BaseModel):
-    branch_id: UUID
+    # Home branch preference only - technicians belong to the chain.
+    branch_id: UUID | None = None
     display_name: str = Field(min_length=1, max_length=255)
 
 

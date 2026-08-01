@@ -28,8 +28,20 @@ class UnassignedLeg(BaseModel):
     end_time: datetime
 
 
+class RosterEntry(BaseModel):
+    staff_id: UUID
+    staff_name: str
+    branch_id: UUID
+    branch_name: str
+    # "pin" = a customer booked this tech by name (untouchable);
+    # "auto" = placed by Step A of the nightly allocation.
+    source: str
+
+
 class AllocationStatusResponse(BaseModel):
     runs: list[AllocationRunResponse]
+    # Who works where on that day (empty until pins exist or Step A has run).
+    roster: list[RosterEntry]
     unassigned: list[UnassignedLeg]
 
 

@@ -17,18 +17,16 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.allocation.application.roster import expected_staff
 from app.allocation.infrastructure.models import AllocationRunModel
-from app.availability.application.capacity import ACTIVE_BOOKING_STATUSES
-from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
-from app.capability.application.matrix import (
-    branch_matrix_configured,
-    ceil_to_grid,
-    is_available,
-    load_matrix,
+from app.availability.application.capacity import (
+    ACTIVE_BOOKING_STATUSES,
+    matrix_configured_for,
 )
+from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
+from app.capability.application.matrix import ceil_to_grid, load_matrix
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
-from app.staff.infrastructure.models import StaffModel, StaffStatus
 
 
 def _day_details(db: Session, branch_id: UUID, target_date: date_type):
@@ -75,15 +73,10 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         {"key": f"allocation:{branch_id}:{target_date.isoformat()}"},
     )
 
-    staff_list = [
-        staff
-        for staff in db.query(StaffModel)
-        .filter(StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE)
-        .all()
-        if is_available(staff, target_date)
-    ]
+    # The techs standing at this branch that day, per the roster (pins + Step A).
+    staff_list = expected_staff(db, branch_id, target_date)
     matrix = load_matrix(db)
-    configured = branch_matrix_configured(db, branch_id)
+    configured = matrix_configured_for(staff_list, matrix)
     rows = _day_details(db, branch_id, target_date)
 
     # Personal timelines and the day's turn ledger start from what is already

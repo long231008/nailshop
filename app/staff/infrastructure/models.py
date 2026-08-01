@@ -25,9 +25,14 @@ class StaffModel(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False, unique=True
     )
-    branch_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("locations.id"), nullable=False
+    # Technicians belong to the CHAIN, not to one salon. This is only the home
+    # branch *preference* (may be empty): each day's actual branch is decided by
+    # customer pins and the nightly Step A allocation (staff_day_assignments).
+    branch_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("locations.id"), nullable=True
     )
+    # False = never moved away from the home branch by the allocator.
+    floating: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[StaffStatus] = mapped_column(
         SAEnum(StaffStatus, name="staff_status", native_enum=False, length=20),

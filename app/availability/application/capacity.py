@@ -16,13 +16,9 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.allocation.application.roster import expected_staff
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
-from app.capability.application.matrix import (
-    branch_matrix_configured,
-    is_available,
-    load_matrix,
-    parse_days_off,
-)
+from app.capability.application.matrix import ceil_to_grid, load_matrix
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import (
     is_closed_day,
@@ -31,7 +27,7 @@ from app.shared.infrastructure.clock import (
     today_in_shop_tz,
 )
 from app.shared.infrastructure.config.settings import settings
-from app.staff.infrastructure.models import StaffModel, StaffStatus
+from app.staff.infrastructure.models import StaffModel
 
 GRID_MINUTES = 15
 
@@ -83,20 +79,51 @@ def _primary_group(cells: dict[UUID, int], services: dict[UUID, ServiceModel]) -
     return min(counts, key=lambda group: (-counts[group], group))
 
 
+def matrix_configured_for(staff_list: list[StaffModel], matrix: dict) -> bool:
+    """Has the owner filled in capability cells for any of these techs? Until
+    then the scheduler runs in legacy mode: menu durations, everyone assumed
+    able to do everything. The first saved cell flips the switch (v3.2)."""
+    return any(matrix.get(staff.id) for staff in staff_list)
+
+
+def eligible_staff(
+    db: Session, branch_id: UUID, service_id: UUID, day: date_type
+) -> list[StaffModel]:
+    """Techs expected at the branch on `day` (per the staffing plan) who can do
+    the service."""
+    staff_list = expected_staff(db, branch_id, day)
+    matrix = load_matrix(db)
+    if not matrix_configured_for(staff_list, matrix):
+        return staff_list
+    return [staff for staff in staff_list if service_id in matrix.get(staff.id, {})]
+
+
+def planning_minutes(db: Session, branch_id: UUID, service_id: UUID, day: date_type) -> int | None:
+    """Cautious any-tech hold: the slowest eligible tech's real minutes, snapped
+    to the grid. None when nobody expected that day can do the service - the
+    service must not be sold for that day (doc 1.1 rule 3)."""
+    staff_list = expected_staff(db, branch_id, day)
+    if not staff_list:
+        return None
+    matrix = load_matrix(db)
+    if not matrix_configured_for(staff_list, matrix):
+        service = db.get(ServiceModel, service_id)
+        return ceil_to_grid(service.duration_min)
+    minutes = [
+        matrix[staff.id][service_id]
+        for staff in staff_list
+        if service_id in matrix.get(staff.id, {})
+    ]
+    return ceil_to_grid(max(minutes)) if minutes else None
+
+
 def expected_group_counts(db: Session, branch_id: UUID, day: date_type) -> dict[str, int]:
-    """Expected techs per skill group on `day` (all-active-staff staffing plan:
-    techs are fixed to their home branch, minus weekly days off)."""
+    """Expected techs per skill group on `day`, from the staffing plan (pins +
+    Step A assignments + home/pool expectations - see roster.expected_staff)."""
     services = {s.id: s for s in db.query(ServiceModel).all()}
     matrix = load_matrix(db)
     counts: dict[str, int] = {}
-    staff_list = (
-        db.query(StaffModel)
-        .filter(StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE)
-        .all()
-    )
-    for staff in staff_list:
-        if day.weekday() in parse_days_off(staff.days_off):
-            continue
+    for staff in expected_staff(db, branch_id, day):
         group = _primary_group(matrix.get(staff.id, {}), services)
         if group is not None:
             counts[group] = counts.get(group, 0) + 1
@@ -160,23 +187,17 @@ class CapacityLedger:
 
     def __init__(self, db: Session, branch_id: UUID, day: date_type):
         self.day = day
-        if branch_matrix_configured(db, branch_id):
+        staff_list = expected_staff(db, branch_id, day)
+        matrix = load_matrix(db)
+        if matrix_configured_for(staff_list, matrix):
             group_counts = expected_group_counts(db, branch_id, day)
             self.lane_caps = {group: lanes_for(count) for group, count in group_counts.items()}
             self.default_cap = 0
         else:
             # Legacy mode (matrix not filled in yet): one pooled lane cap over
-            # every active tech expected in, whatever the skill group.
-            staff_list = (
-                db.query(StaffModel)
-                .filter(
-                    StaffModel.branch_id == branch_id, StaffModel.status == StaffStatus.ACTIVE
-                )
-                .all()
-            )
-            present = sum(1 for staff in staff_list if is_available(staff, day))
+            # every tech expected in, whatever the skill group.
             self.lane_caps = {}
-            self.default_cap = lanes_for(present)
+            self.default_cap = lanes_for(len(staff_list))
         self.used: dict[tuple[str, datetime], int] = {}
         self.used_per_service: dict[tuple[UUID, datetime], int] = {}
         for leg in existing_legs(db, branch_id, day):

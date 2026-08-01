@@ -12,21 +12,19 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.allocation.application.roster import bookable_at, expected_staff
 from app.availability.application.capacity import (
     BookingWindow,
     CapacityLedger,
     booking_window_state,
+    eligible_staff,
     is_window_free,
+    matrix_configured_for,
+    planning_minutes,
     rare_service_cap,
     staff_timeline_busy,
 )
-from app.capability.application.matrix import (
-    branch_matrix_configured,
-    ceil_to_grid,
-    eligible_staff,
-    planning_minutes,
-    real_minutes,
-)
+from app.capability.application.matrix import ceil_to_grid, is_available, load_matrix
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import last_booking_utc, opening_window_utc
 from app.slot_locks.application.locks import locks_overlapping
@@ -57,13 +55,17 @@ def build_visit_legs(
     Any-tech legs hold the cautious planning duration (slowest eligible tech);
     named-tech legs hold that tech's real minutes. None = not sellable that day.
     """
+    matrix = load_matrix(db)
     legs = []
     offset = 0
     for service in services:
         if staff_id is not None:
-            minutes = real_minutes(db, staff_id, service.id)
+            staff_cells = matrix.get(staff_id, {})
+            minutes = staff_cells.get(service.id)
             if minutes is None:
-                if branch_matrix_configured(db, branch_id):
+                if staff_cells or matrix_configured_for(
+                    expected_staff(db, branch_id, day), matrix
+                ):
                     return None  # the named tech cannot do this service - never assign
                 minutes = service.duration_min  # matrix not filled in yet
             minutes = ceil_to_grid(minutes)
@@ -142,7 +144,13 @@ def find_available_slots(
 
     if staff_id is not None:
         staff = db.get(StaffModel, staff_id)
-        if staff is None or staff.branch_id != branch_id:
+        # Techs belong to the chain: a named request works anywhere the tech is
+        # not pinned/assigned elsewhere that day (first booking wins).
+        if (
+            staff is None
+            or not is_available(staff, target_date)
+            or not bookable_at(db, staff, branch_id, target_date)
+        ):
             return []
         busy = staff_timeline_busy(db, staff_id, target_date)
         checker = lambda placed: not _locked(placed, staff_id) and all(  # noqa: E731

@@ -15,11 +15,20 @@ from uuid import UUID
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from app.allocation.application.roster import (
+    PinConflictError,
+    bookable_at,
+    create_pin,
+    expected_staff,
+)
 from app.availability.application.capacity import (
     BookingWindow,
     CapacityLedger,
     booking_window_state,
+    eligible_staff,
     is_window_free,
+    matrix_configured_for,
+    planning_minutes,
     rare_service_cap,
     staff_timeline_busy,
 )
@@ -31,13 +40,7 @@ from app.bookings.application.exceptions import (
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.bookings.presentation.schemas import BookingCreateRequest
 from app.branches.infrastructure.models import LocationModel
-from app.capability.application.matrix import (
-    branch_matrix_configured,
-    ceil_to_grid,
-    eligible_staff,
-    planning_minutes,
-    real_minutes,
-)
+from app.capability.application.matrix import ceil_to_grid, is_available, load_matrix
 from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 from app.discounts.application.gift import find_gift_message
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
@@ -153,22 +156,32 @@ def create_booking(
 
         if item.staff_id is not None:
             # Named technician: real minutes, personal timeline (doc 1.1 rule 1).
+            # Techs belong to the chain - the request pins them to this salon
+            # for the whole day, first booking wins (doc 3.3b).
             staff = (
                 db.query(StaffModel)
                 .filter(
                     StaffModel.id == item.staff_id,
-                    StaffModel.branch_id == payload.branch_id,
                     StaffModel.status == StaffStatus.ACTIVE,
                 )
                 .first()
             )
-            if staff is None:
+            if staff is None or not is_available(staff, booking_date):
                 raise InvalidBookingItemsError(
-                    "The requested staff member does not work at this branch"
+                    "The requested staff member is not working on this day"
                 )
-            minutes = real_minutes(db, staff.id, service.id)
+            if not bookable_at(db, staff, payload.branch_id, booking_date):
+                raise InvalidBookingItemsError(
+                    "The requested staff member is already booked at another "
+                    "salon that day - pick another day or another technician"
+                )
+            matrix = load_matrix(db)
+            staff_cells = matrix.get(staff.id, {})
+            minutes = staff_cells.get(service.id)
             if minutes is None:
-                if branch_matrix_configured(db, payload.branch_id):
+                if staff_cells or matrix_configured_for(
+                    expected_staff(db, payload.branch_id, booking_date), matrix
+                ):
                     raise InvalidBookingItemsError(
                         "The requested staff member does not offer this service"
                     )
@@ -183,6 +196,32 @@ def create_booking(
                 raise StaffConflictError()
             if not is_window_free(timelines[item.staff_id], start_time, hold_end):
                 raise StaffConflictError()
+            # Weekly hours guard (fix #4): a pin must never promise hours the
+            # tech no longer has.
+            week_start = booking_date - timedelta(days=booking_date.weekday())
+            committed = (
+                db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))
+                .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+                .filter(
+                    BookingDetailModel.staff_id == staff.id,
+                    BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+                    BookingModel.booking_date >= week_start,
+                    BookingModel.booking_date < week_start + timedelta(days=7),
+                )
+                .scalar()
+            )
+            if committed + duration_min > staff.max_hours_week * 60:
+                raise InvalidBookingItemsError(
+                    "The requested staff member has no hours left that week - "
+                    "pick another technician or another week"
+                )
+            try:
+                create_pin(db, staff.id, payload.branch_id, booking_date)
+            except PinConflictError:
+                raise InvalidBookingItemsError(
+                    "The requested staff member is already booked at another "
+                    "salon that day - pick another day or another technician"
+                )
             timelines[item.staff_id].append((start_time, hold_end))
             timelines[item.staff_id].sort()
             staff_id = staff.id

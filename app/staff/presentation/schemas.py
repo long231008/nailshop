@@ -7,7 +7,8 @@ from pydantic import BaseModel
 class StaffResponse(BaseModel):
     id: UUID
     user_id: UUID
-    branch_id: UUID
+    # Home branch preference only - the day roster decides the actual salon.
+    branch_id: UUID | None
     display_name: str
     status: str
     can_lock_slots: bool

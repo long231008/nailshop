@@ -5,12 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.allocation.application.materialize import materialize_day, release_staff_assignments
+from app.allocation.application.roster import solve_day
 from app.allocation.application.walkin import WalkInServiceNotFoundError, find_walkin_options
+from app.allocation.infrastructure.assignments import StaffDayAssignmentModel
 from app.allocation.infrastructure.models import AllocationRunModel
 from app.allocation.presentation.schemas import (
     AllocationRunRequest,
     AllocationRunResponse,
     AllocationStatusResponse,
+    RosterEntry,
     UnassignedLeg,
     WalkInOption,
 )
@@ -22,6 +25,7 @@ from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
+from app.staff.infrastructure.models import StaffModel
 
 router = APIRouter(prefix="/allocation", tags=["allocation"])
 
@@ -50,6 +54,9 @@ def run_allocation(
     else:
         branch_ids = [branch.id for branch in db.query(LocationModel).all()]
 
+    # Step A first: every tech gets a branch for the day (pins untouched).
+    solve_day(db, payload.target_date)
+
     runs = []
     for branch_id in branch_ids:
         if payload.release_staff_id is not None:
@@ -73,6 +80,27 @@ def allocation_status(
     if branch_id is not None:
         runs_query = runs_query.filter(AllocationRunModel.branch_id == branch_id)
     runs = runs_query.order_by(AllocationRunModel.created_at.desc()).all()
+
+    roster_query = (
+        db.query(StaffDayAssignmentModel, StaffModel.display_name, LocationModel.name)
+        .join(StaffModel, StaffDayAssignmentModel.staff_id == StaffModel.id)
+        .join(LocationModel, StaffDayAssignmentModel.branch_id == LocationModel.id)
+        .filter(StaffDayAssignmentModel.day == target_date)
+    )
+    if branch_id is not None:
+        roster_query = roster_query.filter(StaffDayAssignmentModel.branch_id == branch_id)
+    roster = [
+        RosterEntry(
+            staff_id=assignment.staff_id,
+            staff_name=staff_name,
+            branch_id=assignment.branch_id,
+            branch_name=branch_name,
+            source=assignment.source.value,
+        )
+        for assignment, staff_name, branch_name in roster_query.order_by(
+            LocationModel.name, StaffModel.display_name
+        ).all()
+    ]
 
     day_start, day_end = day_bounds_utc(target_date)
     unassigned_query = (
@@ -100,7 +128,9 @@ def allocation_status(
             BookingDetailModel.start_time
         ).all()
     ]
-    return AllocationStatusResponse(runs=[_run_response(run) for run in runs], unassigned=unassigned)
+    return AllocationStatusResponse(
+        runs=[_run_response(run) for run in runs], roster=roster, unassigned=unassigned
+    )
 
 
 @router.get("/walkin-options", response_model=list[WalkInOption])

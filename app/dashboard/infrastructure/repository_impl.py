@@ -58,10 +58,18 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
             .count()
         )
 
-        staff_query = self._db.query(StaffModel).filter(StaffModel.status == StaffStatus.ACTIVE)
-        if branch_id is not None:
-            staff_query = staff_query.filter(StaffModel.branch_id == branch_id)
-        active_staff_count = staff_query.count()
+        if branch_id is None:
+            active_staff_count = (
+                self._db.query(StaffModel)
+                .filter(StaffModel.status == StaffStatus.ACTIVE)
+                .count()
+            )
+        else:
+            # Techs belong to the chain: today's headcount at a branch follows
+            # the day roster (pins + Step A), falling back to home preference.
+            from app.allocation.application.roster import expected_staff
+
+            active_staff_count = len(expected_staff(self._db, branch_id, today))
 
         return DashboardSummary(
             date=today,

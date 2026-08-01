@@ -5,10 +5,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.allocation.application.roster import assignment_for
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.auth.domain.value_object import UserRole
 from app.branches.infrastructure.models import LocationModel
-from app.shared.infrastructure.clock import day_bounds_utc
+from app.shared.infrastructure.clock import day_bounds_utc, today_in_shop_tz
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.slot_locks.infrastructure.models import SlotLockModel
@@ -45,7 +46,11 @@ def _authorize_lock_manager(db: Session, current_user: CurrentUser, branch_id: U
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to lock time slots",
         )
-    if staff.branch_id != branch_id:
+    # Techs belong to the chain: a delegated member manages locks at their home
+    # branch and at the branch they are rostered to today.
+    todays = assignment_for(db, staff.id, today_in_shop_tz())
+    allowed = {b for b in (staff.branch_id, todays.branch_id if todays else None) if b}
+    if branch_id not in allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only lock time slots at your own branch",
@@ -63,11 +68,11 @@ def create_slot_lock(
     if db.get(LocationModel, payload.branch_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
     if payload.staff_id is not None:
-        staff = db.get(StaffModel, payload.staff_id)
-        if staff is None or staff.branch_id != payload.branch_id:
+        # Techs belong to the chain - the lock's branch scoping is enough.
+        if db.get(StaffModel, payload.staff_id) is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Staff member not found at this branch",
+                detail="Staff member not found",
             )
 
     lock = SlotLockModel(

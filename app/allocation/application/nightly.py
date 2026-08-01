@@ -9,6 +9,7 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from app.allocation.application.materialize import materialize_day
+from app.allocation.application.roster import solve_day
 from app.allocation.infrastructure.models import AllocationRunModel
 from app.branches.infrastructure.models import LocationModel
 from app.shared.infrastructure.clock import is_closed_day, today_in_shop_tz
@@ -21,6 +22,13 @@ def run_nightly_allocation(db: Session) -> list[AllocationRunModel]:
     if is_closed_day(target_date):
         logger.info("Nightly allocation: %s is a closed day, nothing to assign", target_date)
         return []
+
+    # Step A: place every technician at a branch for tomorrow (pins fixed,
+    # demand-driven greedy for the rest - doc 4.2/4.4).
+    assignments = solve_day(db, target_date)
+    logger.info(
+        "Step A placed %d technicians for %s", len(assignments), target_date
+    )
 
     runs = []
     for branch in db.query(LocationModel).all():

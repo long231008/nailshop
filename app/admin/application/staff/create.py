@@ -22,13 +22,15 @@ class AlreadyStaffError(Exception):
 
 def create_staff(
     db: Session,
-    branch_id: UUID,
+    branch_id: UUID | None,
     display_name: str,
     user_id: UUID | None,
     phone_number: str | None,
     email: str | None,
 ) -> StaffModel:
-    if db.get(LocationModel, branch_id) is None:
+    # Technicians belong to the chain; the branch is only their optional home
+    # preference - each day's salon is decided by pins and the nightly Step A.
+    if branch_id is not None and db.get(LocationModel, branch_id) is None:
         raise BranchNotFoundError()
 
     if user_id is not None:

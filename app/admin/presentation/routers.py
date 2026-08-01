@@ -303,7 +303,7 @@ def grant_staff_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot change your own role",
         )
-    if db.get(LocationModel, payload.branch_id) is None:
+    if payload.branch_id is not None and db.get(LocationModel, payload.branch_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
 
     staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
@@ -328,7 +328,10 @@ def grant_staff_endpoint(
             action="staff.granted",
             entity_type="staff",
             entity_id=staff.id,
-            details={"user_id": str(user.id), "branch_id": str(payload.branch_id)},
+            details={
+                "user_id": str(user.id),
+                "branch_id": str(payload.branch_id) if payload.branch_id else None,
+            },
         )
     )
     db.commit()

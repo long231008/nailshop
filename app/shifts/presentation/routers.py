@@ -58,10 +58,12 @@ def create_shift(
     staff = db.get(StaffModel, payload.staff_id)
     if staff is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff not found")
-    if staff.branch_id != payload.branch_id:
+    # Techs belong to the chain; only reject when a non-floating tech is being
+    # rostered away from their declared home branch.
+    if not staff.floating and staff.branch_id is not None and staff.branch_id != payload.branch_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This staff member does not work at the given branch",
+            detail="This staff member only works at their home branch",
         )
 
     conflict = (
