@@ -41,6 +41,43 @@ CANCELLABLE_STATUSES = (BookingStatus.PENDING, BookingStatus.APPROVED)
 MIN_NOTICE_HOURS = 2
 
 
+def _finalize_cancel(
+    db: Session, booking: BookingModel, actor_user_id: UUID, action: str
+) -> BookingModel:
+    booking.status = BookingStatus.CANCELLED
+    db.flush()
+    release_designs(db, booking.id)
+    # There is no automatic refund: if the deposit was already taken, the audit
+    # entry flags it so the salon knows a refund decision is owed to the customer.
+    deposit_paid = (
+        db.query(PaymentTransactionModel)
+        .filter(
+            PaymentTransactionModel.booking_id == booking.id,
+            PaymentTransactionModel.transaction_type == PaymentTransactionType.DEPOSIT,
+            PaymentTransactionModel.status == PaymentTransactionStatus.SUCCESS,
+        )
+        .first()
+        is not None
+    )
+    db.add(
+        AuditLogModel(
+            actor_user_id=actor_user_id,
+            action=action,
+            entity_type="booking",
+            entity_id=booking.id,
+            details={
+                "deposit_paid": deposit_paid,
+                "deposit_amount": float(booking.deposit_amount)
+                if deposit_paid and booking.deposit_amount is not None
+                else None,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(booking)
+    return booking
+
+
 def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingModel:
     booking = db.get(BookingModel, booking_id)
     if booking is None:
@@ -63,35 +100,17 @@ def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingM
             "before the appointment. Please contact the salon."
         )
 
-    booking.status = BookingStatus.CANCELLED
-    db.flush()
-    release_designs(db, booking.id)
-    # There is no automatic refund: if the deposit was already taken, the audit
-    # entry flags it so the salon knows a refund decision is owed to the customer.
-    deposit_paid = (
-        db.query(PaymentTransactionModel)
-        .filter(
-            PaymentTransactionModel.booking_id == booking.id,
-            PaymentTransactionModel.transaction_type == PaymentTransactionType.DEPOSIT,
-            PaymentTransactionModel.status == PaymentTransactionStatus.SUCCESS,
-        )
-        .first()
-        is not None
-    )
-    db.add(
-        AuditLogModel(
-            actor_user_id=customer_id,
-            action="booking.cancelled_by_customer",
-            entity_type="booking",
-            entity_id=booking.id,
-            details={
-                "deposit_paid": deposit_paid,
-                "deposit_amount": float(booking.deposit_amount)
-                if deposit_paid and booking.deposit_amount is not None
-                else None,
-            },
-        )
-    )
-    db.commit()
-    db.refresh(booking)
-    return booking
+    return _finalize_cancel(db, booking, customer_id, "booking.cancelled_by_customer")
+
+
+def cancel_booking_by_salon(db: Session, booking_id: UUID, actor_user_id: UUID) -> BookingModel:
+    """The salon's own cancellation: no ownership check and no notice window -
+    the desk may cancel right up to the appointment. The distinct audit action
+    keeps salon and customer cancellations tellable apart."""
+    booking = db.get(BookingModel, booking_id)
+    if booking is None:
+        raise BookingNotFoundError()
+    if booking.status not in CANCELLABLE_STATUSES:
+        raise InvalidBookingStateError("Only pending or approved bookings can be cancelled")
+
+    return _finalize_cancel(db, booking, actor_user_id, "booking.cancelled_by_salon")

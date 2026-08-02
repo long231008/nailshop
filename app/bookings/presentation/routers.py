@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth.domain.value_object import UserRole
 from app.bookings.application.approve import SOFT_LOCK_TTL_SECONDS, approve_booking
 from app.bookings.application.bill import get_bill
-from app.bookings.application.cancel import cancel_booking
+from app.bookings.application.cancel import cancel_booking, cancel_booking_by_salon
 from app.bookings.application.complete import complete_booking_detail
 from app.bookings.application.complete_manual import complete_booking_manually
 from app.bookings.application.create import create_booking
@@ -19,6 +19,7 @@ from app.bookings.application.exceptions import (
     InvalidBookingItemsError,
     InvalidBookingStateError,
     NotBookingOwnerError,
+    NotLegOwnerError,
     StaffConflictError,
 )
 from app.bookings.application.final_price import set_final_price
@@ -35,6 +36,7 @@ from app.bookings.presentation.schemas import (
     BookingStatusResponse,
     FinalPriceRequest,
 )
+from app.notification.application.notify import notify_booking_cancelled_by_salon
 from app.notification.domain.sender import NotificationSender
 from app.notification.infrastructure.senders import get_notification_sender
 from app.shared.infrastructure.cache.redis_client import get_redis
@@ -218,19 +220,45 @@ def complete_booking_endpoint(
     booking_id: UUID,
     payload: BookingActionRequest,
     db: Session = Depends(get_db),
-    _=Depends(require_roles(UserRole.STAFF)),
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
 ) -> BookingResponse:
     try:
-        booking = complete_booking_detail(db, booking_id, payload.booking_detail_id)
+        booking = complete_booking_detail(
+            db, booking_id, payload.booking_detail_id, current_user.id, current_user.role
+        )
     except BookingNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     except BookingDetailNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Booking detail not found"
         )
+    except NotLegOwnerError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only complete your own appointments",
+        )
     except InvalidBookingStateError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    return _to_booking_response(db, booking)
+
+
+@router.post("/{booking_id}/salon-cancel", response_model=BookingResponse)
+def salon_cancel_endpoint(
+    booking_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
+) -> BookingResponse:
+    """The desk cancels on the salon's behalf: any owner, no notice window."""
+    try:
+        booking = cancel_booking_by_salon(db, booking_id, current_user.id)
+    except BookingNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except InvalidBookingStateError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    notify_booking_cancelled_by_salon(notification_sender, db, booking.customer_id)
     return _to_booking_response(db, booking)
 
 

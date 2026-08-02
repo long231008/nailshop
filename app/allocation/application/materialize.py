@@ -17,7 +17,7 @@ from datetime import date as date_type
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.allocation.application.roster import expected_staff
@@ -48,6 +48,31 @@ def _day_details(db: Session, branch_id: UUID, target_date: date_type):
         .order_by(BookingDetailModel.start_time)
         .all()
     )
+
+
+def _week_assigned_minutes(db: Session, staff_ids: list[UUID], day: date_type) -> dict[UUID, int]:
+    """Minutes already on each tech's plate for the ISO week of `day` - the
+    ledger behind the max_hours_week guard."""
+    if not staff_ids:
+        return {}
+    week_start = day - timedelta(days=day.weekday())
+    week_end = week_start + timedelta(days=7)
+    rows = (
+        db.query(
+            BookingDetailModel.staff_id,
+            func.coalesce(func.sum(BookingDetailModel.duration_min), 0),
+        )
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .filter(
+            BookingDetailModel.staff_id.in_(staff_ids),
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingModel.booking_date >= week_start,
+            BookingModel.booking_date < week_end,
+        )
+        .group_by(BookingDetailModel.staff_id)
+        .all()
+    )
+    return {staff_id: int(minutes) for staff_id, minutes in rows}
 
 
 def _customer_affinity(db: Session, customer_id: UUID, staff_ids: list[UUID]) -> set[UUID]:
@@ -82,6 +107,11 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     matrix = load_matrix(db)
     configured = matrix_configured_for(staff_list, matrix)
     rows = _day_details(db, branch_id, target_date)
+
+    # The owner's weekly ceiling per tech (fix #4, restored): assigning past it
+    # is refused here, exactly where assignment happens now.
+    week_minutes = _week_assigned_minutes(db, [s.id for s in staff_list], target_date)
+    week_limit = {s.id: s.max_hours_week * 60 for s in staff_list}
 
     # Personal timelines and the day's turn ledger start from legs that already
     # have a technician: an earlier run of this job, or a manual reassignment.
@@ -132,7 +162,10 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
                 if configured:
                     continue
                 minutes = service.duration_min  # matrix not filled in yet
-            real_end = detail.start_time + timedelta(minutes=ceil_to_grid(minutes))
+            real = ceil_to_grid(minutes)
+            if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
+                continue  # no hours left that week
+            real_end = detail.start_time + timedelta(minutes=real)
             hold_end = real_end + timedelta(minutes=service.buffer_after_min)
             if not all(
                 b_end <= detail.start_time or b_start >= hold_end
@@ -165,6 +198,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         detail.duration_min = int((real_end - detail.start_time).total_seconds() // 60)
         timelines[staff.id].append((detail.start_time, hold_end))
         timelines[staff.id].sort()
+        week_minutes[staff.id] = week_minutes.get(staff.id, 0) + detail.duration_min
         turns[staff.id] += float(service.turn_weight)
         prev = last_finish.get(staff.id)
         if prev is None or real_end > prev:

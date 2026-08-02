@@ -63,6 +63,12 @@ class OtpRepository(ABC):
     def delete_email_change(self, user_id: UUID) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def register_email_change_attempt(self, user_id: UUID, ttl_seconds: int) -> int:
+        """Count one wrong code; returns the total so callers can burn the
+        pending change after too many."""
+        raise NotImplementedError
+
 
 class TokenProvider(ABC):
     @abstractmethod

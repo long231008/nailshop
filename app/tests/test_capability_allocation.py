@@ -427,3 +427,58 @@ def test_matrix_save_replaces_only_staff_in_payload(
 
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"], second_staff.id])
 
+
+
+def test_weekly_hours_ceiling_blocks_assignment_and_reassign(
+    client,
+    admin_headers,
+    customer_headers,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """A tech with no hours left that week is skipped by the allocator and
+    refused by manual reassignment (fix #4, restored)."""
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+    from app.staff.infrastructure.models import StaffModel
+
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    detail_id = booking["details"][0]["id"]
+    cleanup_records.append(("booking_details", detail_id))
+
+    staff = db_session.get(StaffModel, seeded_staff["staff_id"])
+    staff.max_hours_week = 0
+    db_session.commit()
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+    assert run.unassigned_count == 1
+
+    reassign = client.post(
+        "/app/allocation/reassign",
+        json={"booking_detail_id": detail_id, "staff_id": str(seeded_staff["staff_id"])},
+        headers=admin_headers,
+    )
+    assert reassign.status_code == 400
+    assert "no hours left" in reassign.json()["detail"]
+
+    staff.max_hours_week = 40
+    db_session.commit()

@@ -64,6 +64,18 @@ def notify_booking_cancelled(sender: NotificationSender, db: Session, customer_i
     _send(sender, messages.booking_cancelled_notification(customer.phone_number, customer.email))
 
 
+def notify_booking_cancelled_by_salon(
+    sender: NotificationSender, db: Session, customer_id: UUID
+) -> None:
+    customer = db.get(UserModel, customer_id)
+    if customer is None:
+        return
+    _send(
+        sender,
+        messages.booking_cancelled_by_salon_notification(customer.phone_number, customer.email),
+    )
+
+
 def notify_booking_confirmed(
     sender: NotificationSender,
     db: Session,

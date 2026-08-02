@@ -16,6 +16,8 @@ router = APIRouter(prefix="/audit-log", tags=["audit-log"])
 def list_audit_log(
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> list[AuditLogEntry]:
@@ -25,7 +27,9 @@ def list_audit_log(
     if to is not None:
         query = query.filter(AuditLogModel.created_at <= to)
 
-    entries = query.order_by(AuditLogModel.created_at.desc()).all()
+    entries = (
+        query.order_by(AuditLogModel.created_at.desc()).limit(limit).offset(offset).all()
+    )
     return [
         AuditLogEntry(
             id=e.id,

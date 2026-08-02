@@ -433,6 +433,14 @@ def update_user_endpoint(
 
     changes = {}
     if payload.role is not None and payload.role != user.role:
+        # Demoting a staff member is the same operation as revoking them:
+        # future rosters are cleared and upcoming legs are unassigned, so a
+        # role edit can never leave an active technician the scheduler still
+        # uses but the salon no longer employs.
+        if user.role == UserRole.STAFF and payload.role == UserRole.CUSTOMER:
+            staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
+            if staff is not None and staff.status != StaffStatus.BLOCKED:
+                block_staff(db, staff.id, current_user.id)
         changes["role"] = {"from": user.role.value, "to": payload.role.value}
         user.role = payload.role
     if payload.status is not None and payload.status != user.status:

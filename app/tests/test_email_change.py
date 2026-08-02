@@ -82,3 +82,26 @@ def test_confirm_without_a_pending_change_is_rejected(client, customer_identity)
         "/app/me/email/confirm", json={"code": "123456"}, headers=customer_identity["headers"]
     )
     assert response.status_code == 400
+
+
+def test_five_wrong_codes_burn_the_pending_change(
+    client, customer_headers, fake_redis, customer_identity, unique_email
+):
+    start = client.post("/app/me/email", json={"email": unique_email}, headers=customer_headers)
+    assert start.status_code == 200
+
+    for _attempt in range(4):
+        wrong = client.post(
+            "/app/me/email/confirm", json={"code": "000000"}, headers=customer_headers
+        )
+        assert wrong.status_code == 400
+
+    fifth = client.post("/app/me/email/confirm", json={"code": "000000"}, headers=customer_headers)
+    assert fifth.status_code == 429
+
+    # The real code no longer works: the pending change was burned.
+    real_code = fake_redis.hgetall(f"email_change:{customer_identity['id']}")
+    assert real_code == {}
+    retry = client.post("/app/me/email/confirm", json={"code": "123456"}, headers=customer_headers)
+    assert retry.status_code == 400
+    assert "No email change is pending" in retry.json()["detail"]

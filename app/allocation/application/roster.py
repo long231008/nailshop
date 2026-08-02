@@ -14,7 +14,7 @@ Customer wishes for a particular tech are just preferences on booking legs
 from datetime import date as date_type
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.allocation.infrastructure.assignments import AssignmentSource, StaffDayAssignmentModel
@@ -114,19 +114,62 @@ def _demand_minutes(db: Session, day: date_type) -> dict[UUID, dict[str, int]]:
     return demand
 
 
+def _anchored_branches(db: Session, day: date_type) -> dict[UUID, UUID]:
+    """staff -> branch for every tech who already has assigned legs on `day`.
+    Ties (legs at two branches after odd manual moves) go to the busier one."""
+    day_start, day_end = day_bounds_utc(day)
+    rows = (
+        db.query(
+            BookingDetailModel.staff_id,
+            BookingModel.branch_id,
+            func.count(BookingDetailModel.id),
+        )
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .filter(
+            BookingDetailModel.staff_id.isnot(None),
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingDetailModel.start_time >= day_start,
+            BookingDetailModel.start_time < day_end,
+        )
+        .group_by(BookingDetailModel.staff_id, BookingModel.branch_id)
+        .all()
+    )
+    best: dict[UUID, tuple[int, UUID]] = {}
+    for staff_id, branch_id, leg_count in rows:
+        current = best.get(staff_id)
+        if current is None or leg_count > current[0]:
+            best[staff_id] = (leg_count, branch_id)
+    return {staff_id: branch_id for staff_id, (_count, branch_id) in best.items()}
+
+
 def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
     """Step A (greedy, doc 4.4): place every available tech at a branch for the
     day. Non-floating techs stay home; floating techs go where uncovered
     demand (in groups they cover) is largest, home breaking ties.
-    Idempotent: the day's previous placements are replaced."""
+    Idempotent: the day's previous placements are replaced - except that a
+    tech whose legs are already assigned that day is anchored to that branch,
+    so re-running the solver mid-day can never strand assigned work at a
+    branch its technician was moved away from."""
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key)::bigint)"),
         {"key": f"solve_day:{day.isoformat()}"},
     )
-    db.query(StaffDayAssignmentModel).filter(
+    anchored = _anchored_branches(db, day)
+    delete_query = db.query(StaffDayAssignmentModel).filter(
         StaffDayAssignmentModel.day == day,
-    ).delete()
+    )
+    if anchored:
+        delete_query = delete_query.filter(
+            StaffDayAssignmentModel.staff_id.notin_(anchored.keys())
+        )
+    delete_query.delete(synchronize_session=False)
     db.flush()
+    kept_rows = {
+        a.staff_id
+        for a in db.query(StaffDayAssignmentModel)
+        .filter(StaffDayAssignmentModel.day == day)
+        .all()
+    }
 
     branches = list(db.query(LocationModel).order_by(LocationModel.created_at, LocationModel.id))
     if not branches:
@@ -171,6 +214,18 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
     unplaced = []
     for staff in active:
         if not is_available(staff, day):
+            continue
+        if staff.id in anchored:
+            place(staff, anchored[staff.id])
+            if staff.id not in kept_rows:
+                db.add(
+                    StaffDayAssignmentModel(
+                        staff_id=staff.id,
+                        branch_id=anchored[staff.id],
+                        day=day,
+                        source=AssignmentSource.AUTO,
+                    )
+                )
             continue
         if not staff.floating and staff.branch_id is not None:
             place(staff, staff.branch_id)

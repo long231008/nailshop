@@ -11,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.allocation.application.materialize import _week_assigned_minutes
 from app.allocation.application.roster import expected_staff
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.availability.application.capacity import (
@@ -87,7 +88,12 @@ def reassign_leg(
             raise ReassignNotAllowedError("The staff member does not offer this service")
         minutes = service.duration_min  # matrix not filled in yet
 
-    real_end = detail.start_time + timedelta(minutes=ceil_to_grid(minutes))
+    real = ceil_to_grid(minutes)
+    committed = _week_assigned_minutes(db, [staff.id], day).get(staff.id, 0)
+    if committed + real > staff.max_hours_week * 60:
+        raise ReassignNotAllowedError("The staff member has no hours left that week")
+
+    real_end = detail.start_time + timedelta(minutes=real)
     hold_end = real_end + timedelta(minutes=service.buffer_after_min)
 
     # The customer sits in one chair: a slower tech must not run into the next

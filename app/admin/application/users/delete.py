@@ -54,6 +54,8 @@ def delete_or_anonymize_user(db: Session, user_id: UUID, actor_user_id: UUID) ->
     if _has_history(db, user_id, staff):
         user.phone_number = None
         user.email = None
+        user.first_name = None
+        user.surname = None
         user.status = UserStatus.BLOCKED
         if staff is not None:
             from app.staff.infrastructure.models import StaffStatus

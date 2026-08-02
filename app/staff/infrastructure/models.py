@@ -12,7 +12,10 @@ from app.shared.infrastructure.database.base import Base
 
 class StaffStatus(str, Enum):
     ACTIVE = "active"
+    # Off the schedule (never rostered or assigned) but still visible in the
+    # capability-matrix editor - e.g. on leave, coming back.
     RESERVED = "reserved"
+    # Off the schedule AND hidden everywhere; future work was released.
     BLOCKED = "blocked"
 
 

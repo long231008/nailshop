@@ -1,7 +1,7 @@
 from datetime import date as date_type
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
@@ -45,8 +45,11 @@ def daily_schedule(
 @router.get("/pending", response_model=list[PendingAppointment])
 def upcoming_pending(
     branch_id: UUID | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.STAFF)),
 ) -> list[PendingAppointment]:
     """All future booking requests needing action, across every date."""
-    return [PendingAppointment(**p) for p in get_upcoming_pending(db, branch_id)]
+    pending = get_upcoming_pending(db, branch_id)[offset : offset + limit]
+    return [PendingAppointment(**p) for p in pending]

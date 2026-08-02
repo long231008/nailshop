@@ -282,3 +282,30 @@ def test_admin_cannot_delete_self_or_other_admin(
         f"/app/admin/users/{other_admin.id}", headers=admin_identity["headers"]
     )
     assert response.status_code == 400
+
+
+def test_demoting_staff_role_blocks_their_staff_profile(
+    client, admin_headers, seeded_staff, db_session, cleanup_records
+):
+    from app.staff.infrastructure.models import StaffModel, StaffStatus
+
+    response = client.patch(
+        f"/app/admin/users/{seeded_staff['user_id']}",
+        json={"role": "customer"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["role"] == "customer"
+
+    staff = db_session.get(StaffModel, seeded_staff["staff_id"])
+    db_session.refresh(staff)
+    assert staff.status == StaffStatus.BLOCKED
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+
+    for entry in (
+        db_session.query(AuditLogModel)
+        .filter(AuditLogModel.entity_id.in_([seeded_staff["staff_id"], seeded_staff["user_id"]]))
+        .all()
+    ):
+        cleanup_records.append(("audit_logs", entry.id))
