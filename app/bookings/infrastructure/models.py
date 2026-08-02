@@ -3,7 +3,7 @@ from datetime import date as date_
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -28,6 +28,10 @@ class BookingDetailStatus(str, Enum):
 
 class BookingModel(Base):
     __tablename__ = "bookings"
+    __table_args__ = (
+        Index("ix_bookings_customer_id", "customer_id"),
+        Index("ix_bookings_branch_date", "branch_id", "booking_date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -62,6 +66,10 @@ class BookingModel(Base):
 
 class BookingDetailModel(Base):
     __tablename__ = "booking_details"
+    __table_args__ = (
+        Index("ix_booking_details_booking_id", "booking_id"),
+        Index("ix_booking_details_staff_start", "staff_id", "start_time"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
