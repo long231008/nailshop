@@ -30,3 +30,11 @@ class BranchResponse(BaseModel):
     address: str | None
     phone_number: str | None
     services: list[BranchServiceSummary] = []
+
+
+class BranchTechnicianSummary(BaseModel):
+    """The public face of a technician: just enough for a customer to name
+    their wish when booking (preferred technician, granted by hand later)."""
+
+    id: UUID
+    display_name: str

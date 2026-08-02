@@ -18,7 +18,10 @@ Facebook pair do the same via OAuth, delivering the token to
 `FRONTEND_URL/auth/callback` in the URL fragment.
 
 **Discover (public, no auth).** `GET /branches` (each branch embeds its
-services plus the global NULL-branch ones), `GET /services`,
+services plus the global NULL-branch ones),
+`GET /branches/{id}/technicians[?date]` (names + ids only - what the booking
+form's wish picker shows; with `date` it drops techs on their weekly day
+off), `GET /services`,
 `GET /slot-locks/public` (branch-wide closures, shown crossed out),
 `GET /discounts/gift-preview`.
 
