@@ -136,9 +136,10 @@ def test_staff_with_permission_cannot_lock_other_branch(
     assert response.status_code == 403
 
 
-def test_staff_specific_lock_leaves_other_staff_available(
+def test_staff_specific_lock_is_honoured_by_the_allocator(
     client,
     admin_headers,
+    customer_headers,
     db_session,
     seeded_branch,
     seeded_service,
@@ -148,8 +149,11 @@ def test_staff_specific_lock_leaves_other_staff_available(
 ):
     import uuid
 
+    from app.allocation.application.materialize import materialize_day
     from app.auth.domain.value_object import UserRole, UserStatus
     from app.auth.infrastructure.models import UserModel
+    from app.bookings.infrastructure.models import BookingDetailModel
+    from app.shared.infrastructure.clock import shop_timezone
     from app.staff.infrastructure.models import StaffModel
 
     other_user = UserModel(
@@ -178,30 +182,44 @@ def test_staff_specific_lock_leaves_other_staff_available(
     locked_start = seeded_shift["start"]
     locked_end = locked_start + timedelta(hours=2)
 
-    # The locked member's personal timeline hides the locked window...
-    locked_member_slots = client.get(
+    # Availability is untouched: capacity is sold any-tech and the second
+    # member is still free during the locked window.
+    slots = client.get(
         "/app/availability",
         params={
             "branch_id": str(seeded_branch),
             "service_id": str(seeded_service),
-            "staff_id": str(seeded_staff["staff_id"]),
             "date": locked_start.date().isoformat(),
         },
     ).json()["slots"]
-    for slot in locked_member_slots:
-        assert not _overlaps(slot, locked_start, locked_end)
+    assert any(_overlaps(slot, locked_start, locked_end) for slot in slots)
 
-    # ...while the other member still offers it.
-    other_member_slots = client.get(
-        "/app/availability",
-        params={
+    # A wish for the locked member inside the window cannot be honoured: the
+    # allocator seats the other member instead.
+    booking = client.post(
+        "/app/bookings",
+        json={
             "branch_id": str(seeded_branch),
-            "service_id": str(seeded_service),
-            "staff_id": str(other_staff.id),
-            "date": locked_start.date().isoformat(),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": locked_start.isoformat(),
+                }
+            ],
         },
-    ).json()["slots"]
-    assert any(_overlaps(slot, locked_start, locked_end) for slot in other_member_slots)
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    day = locked_start.astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+
+    detail = db_session.get(BookingDetailModel, uuid.UUID(booking["details"][0]["id"]))
+    db_session.refresh(detail)
+    assert detail.staff_id == other_staff.id
 
 
 def test_booking_beyond_horizon_is_rejected(

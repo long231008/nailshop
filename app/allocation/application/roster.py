@@ -1,13 +1,14 @@
-"""Who works where, per day - pins and the staffing plan (doc 3.3b + 4.2/4.4).
+"""Who works where, per day - the staffing plan (doc 3.3b + 4.2/4.4).
 
-Technicians belong to the chain. Three layers decide their branch for a day:
+Technicians belong to the chain. Two layers decide their branch for a day:
 
-1. PIN - a customer booked them by name at a branch: exclusive, first booking
-   wins, enforced by the (staff, day) unique constraint plus an advisory lock.
-2. AUTO - Step A of the nightly allocation placed them (greedy solver below).
-3. Neither yet (open future days) - the *expected* plan used by the capacity
-   ledger: home branch if set, otherwise the homeless pool is spread evenly
-   across branches. Step A trues the guesswork up the evening before.
+1. AUTO - Step A of the nightly allocation placed them (greedy solver below).
+2. Not assigned yet (open future days) - the *expected* plan used by the
+   capacity ledger: home branch if set, otherwise the homeless pool is spread
+   evenly across branches. Step A trues the guesswork up the evening before.
+
+Customer wishes for a particular tech are just preferences on booking legs
+(preferred_staff_id); they never reserve a technician or a branch.
 """
 
 from datetime import date as date_type
@@ -38,14 +39,6 @@ ACTIVE_BOOKING_STATUSES = [
 ]
 
 
-class PinConflictError(Exception):
-    """The technician is already pinned to another salon that day."""
-
-    def __init__(self, other_branch_id: UUID):
-        self.other_branch_id = other_branch_id
-        super().__init__(str(other_branch_id))
-
-
 def assignment_for(db: Session, staff_id: UUID, day: date_type) -> StaffDayAssignmentModel | None:
     return (
         db.query(StaffDayAssignmentModel)
@@ -55,68 +48,6 @@ def assignment_for(db: Session, staff_id: UUID, day: date_type) -> StaffDayAssig
         )
         .first()
     )
-
-
-def create_pin(db: Session, staff_id: UUID, branch_id: UUID, day: date_type) -> None:
-    """Claim the technician for this branch-day (first-booking-wins).
-
-    The advisory lock serialises two salons racing for the same tech in the
-    same second; the unique constraint backstops everything else.
-    """
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:key)::bigint)"),
-        {"key": f"pin:{staff_id}:{day.isoformat()}"},
-    )
-    existing = assignment_for(db, staff_id, day)
-    if existing is None:
-        db.add(
-            StaffDayAssignmentModel(
-                staff_id=staff_id, branch_id=branch_id, day=day, source=AssignmentSource.PIN
-            )
-        )
-        db.flush()
-        return
-    if existing.branch_id != branch_id:
-        raise PinConflictError(existing.branch_id)
-    if existing.source == AssignmentSource.AUTO:
-        existing.source = AssignmentSource.PIN  # a named booking hardens the auto placement
-
-
-def release_pin_if_unused(db: Session, staff_id: UUID, day: date_type) -> None:
-    """Cancelling the LAST named booking of (tech, day) releases the pin, so
-    other salons can claim the technician again (doc 3.3b pin lifecycle)."""
-    assignment = assignment_for(db, staff_id, day)
-    if assignment is None or assignment.source != AssignmentSource.PIN:
-        return
-    day_start, day_end = day_bounds_utc(day)
-    still_pinned = (
-        db.query(BookingDetailModel.id)
-        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
-        .filter(
-            BookingDetailModel.staff_id == staff_id,
-            BookingDetailModel.staff_requested.is_(True),
-            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
-            BookingDetailModel.start_time >= day_start,
-            BookingDetailModel.start_time < day_end,
-        )
-        .first()
-    )
-    if still_pinned is None:
-        db.delete(assignment)
-
-
-def bookable_at(db: Session, staff: StaffModel, branch_id: UUID, day: date_type) -> bool:
-    """May this tech serve a NAMED booking at this branch on this day?
-
-    Pinned/assigned elsewhere - no. Otherwise any floating tech may be claimed
-    anywhere (first booking wins); a non-floating tech only at their home.
-    """
-    assignment = assignment_for(db, staff.id, day)
-    if assignment is not None:
-        return assignment.branch_id == branch_id
-    if not staff.floating and staff.branch_id is not None:
-        return staff.branch_id == branch_id
-    return True
 
 
 def expected_staff(db: Session, branch_id: UUID, day: date_type) -> list[StaffModel]:
@@ -185,16 +116,15 @@ def _demand_minutes(db: Session, day: date_type) -> dict[UUID, dict[str, int]]:
 
 def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
     """Step A (greedy, doc 4.4): place every available tech at a branch for the
-    day. Pins are untouchable; non-floating techs stay home; floating techs go
-    where uncovered demand (in groups they cover) is largest, home breaking
-    ties. Idempotent: previous AUTO rows for the day are replaced."""
+    day. Non-floating techs stay home; floating techs go where uncovered
+    demand (in groups they cover) is largest, home breaking ties.
+    Idempotent: the day's previous placements are replaced."""
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key)::bigint)"),
         {"key": f"solve_day:{day.isoformat()}"},
     )
     db.query(StaffDayAssignmentModel).filter(
         StaffDayAssignmentModel.day == day,
-        StaffDayAssignmentModel.source == AssignmentSource.AUTO,
     ).delete()
     db.flush()
 
@@ -204,15 +134,9 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
     matrix = load_matrix(db)
     services = {s.id: s for s in db.query(ServiceModel).all()}
     demand = _demand_minutes(db, day)
-    pins = {
-        a.staff_id: a
-        for a in db.query(StaffDayAssignmentModel)
-        .filter(StaffDayAssignmentModel.day == day)
-        .all()
-    }
 
-    # Uncovered demand per branch, eaten as techs are placed. A pinned or
-    # placed tech covers their capable groups with a workday's worth of time.
+    # Uncovered demand per branch, eaten as techs are placed. A placed tech
+    # covers their capable groups with a workday's worth of time.
     WORKDAY_MINUTES = 8 * 60
     uncovered: dict[UUID, dict[str, int]] = {
         branch.id: dict(demand.get(branch.id, {})) for branch in branches
@@ -247,10 +171,6 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
     unplaced = []
     for staff in active:
         if not is_available(staff, day):
-            continue
-        pin = pins.get(staff.id)
-        if pin is not None:
-            place(staff, pin.branch_id)
             continue
         if not staff.floating and staff.branch_id is not None:
             place(staff, staff.branch_id)

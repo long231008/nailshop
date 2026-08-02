@@ -146,6 +146,13 @@ def test_deposit_paid_booking_lands_on_the_grid(
     )
     cleanup_records.append(("payment_transactions", transaction.id))
 
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+
     response = client.get(
         "/app/schedule",
         params={

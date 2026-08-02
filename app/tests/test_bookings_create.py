@@ -37,7 +37,7 @@ def test_create_booking_happy_path(
     cleanup_records.append(("booking_details", body["details"][0]["id"]))
 
 
-def test_create_booking_rejects_staff_conflict(
+def test_create_booking_rejects_overlapping_capacity(
     client,
     customer_headers,
     seeded_branch,
@@ -72,7 +72,10 @@ def test_create_booking_rejects_staff_conflict(
     }
     response = client.post("/app/bookings", json=overlapping_payload, headers=customer_headers)
 
-    assert response.status_code == 409
+    # One tech = one lane: the overlapping request runs out of capacity. The
+    # preferred technician no longer reserves a personal timeline at booking.
+    assert response.status_code == 400
+    assert "no longer has room" in response.json()["detail"]
 
 
 def test_create_booking_rejects_over_daily_limit(

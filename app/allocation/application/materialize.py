@@ -6,8 +6,10 @@ interval assignment. Each leg shrinks from its cautious planning duration to the
 assigned tech's real minutes, so timelines reflect when techs actually finish.
 
 Fairness follows the salon turn system (doc 3.5): every assignment adds the
-service's turn weight to the tech's ledger, and the next any-tech leg goes to
-whoever holds the fewest turns.
+service's turn weight to the tech's ledger, and the next leg goes to whoever
+holds the fewest turns - except that a customer's preferred technician
+(preferred_staff_id, a wish recorded at booking time) is seated first whenever
+their timeline allows.
 """
 
 from datetime import date as date_type
@@ -27,6 +29,7 @@ from app.bookings.infrastructure.models import BookingDetailModel, BookingModel,
 from app.capability.application.matrix import ceil_to_grid, load_matrix
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
+from app.slot_locks.application.locks import locks_overlapping
 
 
 def _day_details(db: Session, branch_id: UUID, target_date: date_type):
@@ -93,6 +96,18 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             if prev is None or detail.end_time > prev:
                 last_finish[detail.staff_id] = detail.end_time
 
+    # Manual slot locks close parts of the day: a staff lock blocks that tech,
+    # a branch-wide lock blocks everyone. Without this, the allocator could
+    # seat a customer inside a range the salon explicitly closed.
+    lock_day_start, lock_day_end = day_bounds_utc(target_date)
+    for lock in locks_overlapping(db, branch_id, lock_day_start, lock_day_end):
+        if lock.staff_id is not None:
+            if lock.staff_id in timelines:
+                timelines[lock.staff_id].append((lock.start_time, lock.end_time))
+        else:
+            for windows in timelines.values():
+                windows.append((lock.start_time, lock.end_time))
+
     for windows in timelines.values():
         windows.sort()
 
@@ -135,7 +150,8 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         staff, real_end, hold_end = min(
             candidates,
             key=lambda entry: (
-                turns[entry[0].id],  # fairness first (doc 3.5)
+                entry[0].id != detail.preferred_staff_id,  # the customer's wish first
+                turns[entry[0].id],  # then fairness (doc 3.5)
                 entry[0].id not in booking_staff,  # continuity within the visit
                 entry[0].id not in affinity,  # the customer's usual tech
                 last_finish.get(entry[0].id, day_start),  # longest idle wins ties
@@ -170,9 +186,9 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
 def release_staff_assignments(
     db: Session, staff_id: UUID, branch_id: UUID, target_date: date_type
 ) -> int:
-    """A tech calls in sick after the close (edge case 10): free only their
-    any-tech legs so a re-run can hand them to someone else. Legs the customer
-    booked by name are left for a human to phone about - never auto-swapped."""
+    """A tech calls in sick after the close (edge case 10): free all their legs
+    so a re-run can hand them to someone else. Named techs are preferences,
+    not promises, so nothing needs a phone call first."""
     day_start, day_end = day_bounds_utc(target_date)
     details = (
         db.query(BookingDetailModel)
@@ -181,7 +197,6 @@ def release_staff_assignments(
             BookingModel.branch_id == branch_id,
             BookingModel.status.in_([BookingStatus.PENDING, BookingStatus.APPROVED]),
             BookingDetailModel.staff_id == staff_id,
-            BookingDetailModel.staff_requested.is_(False),
             BookingDetailModel.start_time >= day_start,
             BookingDetailModel.start_time < day_end,
         )

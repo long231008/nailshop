@@ -31,16 +31,18 @@ fixed demand). Any-tech slots are sold against the capacity ledger: one lane
 number of expected techs of that group (full capacity - appointment-only, no
 reserve); leg length is the slowest eligible tech's real minutes (capability
 matrix), grid-snapped.
-Named-tech slots check that tech's personal timeline instead. Candidate
+A preferred technician does not change which times are sellable - the wish
+is recorded on the booking and honoured at the nightly allocation. Candidate
 starts run 09:00–17:30 inclusive; a 17:30 start may run past 18:00 closing
 by explicit choice.
 
 **Create.** `POST /bookings` (CUSTOMER). Per-branch advisory lock serializes
 the capacity check against the insert. Items run back-to-back on one chair
 from the first start time. Per-customer cap: ≤120 booked minutes per day.
-Naming a tech creates an exclusive day pin (unique `(staff_id, day)` row) —
-first booking wins the tech for that branch-day chain-wide, and a weekly
-`max_hours_week` guard applies. A custom design must be owned, PRICED, and
+Naming a tech records a *preference* (`preferred_staff_id`) — a wish the
+nightly allocation seats first whenever that tech's timeline allows, never a
+promise; wishes that cannot come true (tech off that day, or lacking the
+capability cell) are rejected up front. A custom design must be owned, PRICED, and
 attached to a nail-art (`category == "addon"`) service; its quote replaces
 the service price and the design flips to ACCEPTED. Result: booking PENDING,
 plus a `gift_message` when an active GIFT discount threshold is beaten.
@@ -68,8 +70,7 @@ notified.
 
 **Self-service.** `GET /me/bookings` regenerates deposit links for
 approved-but-unpaid bookings. `POST /bookings/{id}/cancel` (owner only,
-PENDING/APPROVED, ≥2h notice) releases designs and, when it was the tech's
-last named booking of the day, the exclusive pin; the audit entry records
+PENDING/APPROVED, ≥2h notice) releases designs; the audit entry records
 whether a paid deposit is now owed back (there is no automatic refund —
 refunds arrive later as `transaction_type=refund` webhooks and are
 subtracted from dashboard revenue).
@@ -106,21 +107,21 @@ deposit).
 `run_nightly_allocation` targets tomorrow (skips Sundays):
 
 - **Step A `solve_day`** places every active, available tech at exactly one
-  branch: pins are untouchable, non-floating techs go home, floating techs
-  go where uncovered demand in their skill groups is largest.
+  branch: non-floating techs go home, floating techs go where uncovered
+  demand in their skill groups is largest.
 - **Step B `materialize_day`** (per branch, advisory-locked, idempotent)
-  names a tech for every unassigned leg — fewest turns first, then
-  same-booking continuity, then customer affinity, then longest idle — and
+  names a tech for every leg — the customer's preferred tech first when
+  their timeline (including manual slot locks) allows, then fewest turns,
+  same-booking continuity, customer affinity, and longest idle — and
   shrinks the leg from the cautious planning hold to the tech's real
   minutes, so timelines show when each tech is really free. Legs nobody can
   serve stay unassigned and are logged for a human: the repair ladder is
   deliberately not automated.
 
 **Repair.** `POST /allocation/run` (ADMIN) re-runs Step A + materialize;
-`release_staff_id` first frees a sick tech's any-tech legs (named legs are
-never auto-swapped — reception phones the customer).
-`GET /allocation/status` shows runs, the day roster (pin/auto), and
-unassigned legs.
+`release_staff_id` first frees all of a sick tech's legs (named techs are
+preferences, not promises, so nothing needs a phone call first).
+`GET /allocation/status` shows runs, the day roster, and unassigned legs.
 
 **The day.** `GET /schedule?date=` (STAFF): deposit-secured appointments on
 the grid, the rest split into awaiting_approval / awaiting_deposit; the

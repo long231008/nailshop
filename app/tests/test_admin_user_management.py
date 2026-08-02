@@ -155,6 +155,7 @@ def test_admin_sees_booking_count_and_each_booking(
     seeded_staff,
     seeded_shift,
     cleanup_records,
+    db_session,
 ):
     booking = client.post(
         "/app/bookings",
@@ -172,6 +173,13 @@ def test_admin_sees_booking_count_and_each_booking(
     ).json()
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
 
     listing = client.get("/app/admin/users", headers=admin_headers).json()
     entry = next(u for u in listing if u["id"] == str(customer_identity["id"]))

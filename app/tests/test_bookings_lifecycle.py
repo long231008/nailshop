@@ -124,6 +124,7 @@ def test_start_service_and_complete_flow(
     seeded_service,
     seeded_shift,
     cleanup_records,
+    db_session,
 ):
     booking = _create_booking(
         client,
@@ -136,6 +137,13 @@ def test_start_service_and_complete_flow(
     )
     client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
     detail_id = booking["details"][0]["id"]
+
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
 
     start_response = client.post(
         f"/app/staff/{seeded_staff['staff_id']}/start-service",
@@ -163,6 +171,7 @@ def test_staff_cannot_start_service_while_busy_with_another(
     seeded_service,
     seeded_shift,
     cleanup_records,
+    db_session,
 ):
     first = _create_booking(
         client,
@@ -174,11 +183,6 @@ def test_staff_cannot_start_service_while_busy_with_another(
         cleanup_records,
     )
     client.post(f"/app/bookings/{first['id']}/approve", headers=admin_headers)
-    client.post(
-        f"/app/staff/{seeded_staff['staff_id']}/start-service",
-        json={"booking_detail_id": first["details"][0]["id"]},
-        headers=seeded_staff["headers"],
-    )
 
     second_payload = {
         "branch_id": str(seeded_branch),
@@ -193,6 +197,19 @@ def test_staff_cannot_start_service_while_busy_with_another(
     second = client.post("/app/bookings", json=second_payload, headers=customer_headers)
     cleanup_records.append(("bookings", second.json()["id"]))
     cleanup_records.append(("booking_details", second.json()["details"][0]["id"]))
+
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+
+    client.post(
+        f"/app/staff/{seeded_staff['staff_id']}/start-service",
+        json={"booking_detail_id": first["details"][0]["id"]},
+        headers=seeded_staff["headers"],
+    )
 
     response = client.post(
         f"/app/staff/{seeded_staff['staff_id']}/start-service",

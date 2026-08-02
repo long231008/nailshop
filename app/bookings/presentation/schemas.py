@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 class BookingItemRequest(BaseModel):
     service_id: UUID
     service_extension_id: UUID | None = None
+    # Preferred technician: a wish, not a promise. The nightly allocation
+    # seats this tech first whenever their timeline allows.
     staff_id: UUID | None = None
     start_time: datetime
     # A priced custom design the customer accepted: its quote replaces the
