@@ -70,6 +70,31 @@ def _today_turns(db: Session, branch_id: UUID) -> dict[UUID, float]:
     return turns
 
 
+def _unassigned_windows(db: Session, branch_id: UUID) -> list[tuple]:
+    """Windows of today's legs that still have no technician (a nightly run that
+    left legs unassigned, or a sick-tech release). They sit on nobody's personal
+    timeline, but the time is promised to a customer and one of today's techs
+    will have to serve it - so no walk-in may be seated over it."""
+    day_start, day_end = day_bounds_utc(today_in_shop_tz())
+    rows = (
+        db.query(BookingDetailModel, ServiceModel.buffer_after_min)
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+        .filter(
+            BookingModel.branch_id == branch_id,
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingDetailModel.staff_id.is_(None),
+            BookingDetailModel.start_time < day_end,
+            BookingDetailModel.end_time > day_start,
+        )
+        .all()
+    )
+    return [
+        (detail.start_time, detail.end_time + timedelta(minutes=buffer_after_min))
+        for detail, buffer_after_min in rows
+    ]
+
+
 def find_walkin_options(db: Session, branch_id: UUID, service_id: UUID) -> list[dict]:
     service = db.get(ServiceModel, service_id)
     if service is None:
@@ -85,6 +110,7 @@ def find_walkin_options(db: Session, branch_id: UUID, service_id: UUID) -> list[
     staff_list = expected_staff(db, branch_id, today)
     configured = matrix_configured_for(staff_list, matrix)
     turns = _today_turns(db, branch_id)
+    unassigned = _unassigned_windows(db, branch_id)
 
     options = []
     for staff in staff_list:
@@ -96,7 +122,7 @@ def find_walkin_options(db: Session, branch_id: UUID, service_id: UUID) -> list[
         need = timedelta(
             minutes=ceil_to_grid(minutes) + service.buffer_after_min + GUARD_MINUTES
         )
-        busy = staff_timeline_busy(db, staff.id, today)
+        busy = sorted(staff_timeline_busy(db, staff.id, today) + unassigned)
 
         cursor = now
         while cursor < min(close_utc, deadline):

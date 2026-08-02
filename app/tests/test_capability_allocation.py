@@ -379,3 +379,115 @@ def test_step_a_places_every_available_tech_and_respects_pins(
             text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day}
         )
         db_session.commit()
+
+
+def test_matrix_save_replaces_only_staff_in_payload(
+    client,
+    admin_headers,
+    db_session,
+    seeded_service,
+    seeded_staff,
+    second_staff,
+):
+    """A partial payload edits only the technicians it names; everyone else's
+    cells survive. An empty mapping clears a technician's whole row."""
+    first_id = str(seeded_staff["staff_id"])
+    second_id = str(second_staff.id)
+    service_id = str(seeded_service)
+
+    save = client.put(
+        "/app/capability/matrix",
+        json={
+            "services": [],
+            "staff": [],
+            "capability": {first_id: {service_id: 45}, second_id: {service_id: 60}},
+        },
+        headers=admin_headers,
+    )
+    assert save.status_code == 200, save.text
+
+    partial = client.put(
+        "/app/capability/matrix",
+        json={"services": [], "staff": [], "capability": {first_id: {service_id: 30}}},
+        headers=admin_headers,
+    )
+    assert partial.status_code == 200, partial.text
+
+    matrix = client.get("/app/capability/matrix", headers=admin_headers).json()["capability"]
+    assert matrix[first_id][service_id] == 30
+    # The second tech was absent from the payload - their row must survive.
+    assert matrix[second_id][service_id] == 60
+
+    cleared = client.put(
+        "/app/capability/matrix",
+        json={"services": [], "staff": [], "capability": {second_id: {}}},
+        headers=admin_headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    matrix = client.get("/app/capability/matrix", headers=admin_headers).json()["capability"]
+    assert not matrix.get(second_id)
+    assert matrix[first_id][service_id] == 30
+
+    _cleanup_capabilities(db_session, [seeded_staff["staff_id"], second_staff.id])
+
+
+def test_walkin_options_avoid_unassigned_legs(
+    monkeypatch,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    customer_identity,
+    cleanup_records,
+):
+    """A leg the nightly run left without a technician sits on nobody's personal
+    timeline, but its time is promised to a customer - the walk-in engine must
+    not offer a seat over it."""
+    from datetime import datetime, time, timedelta, timezone
+
+    from app.allocation.application import walkin as walkin_module
+    from app.bookings.infrastructure.models import BookingModel, BookingStatus
+    from app.shared.infrastructure.clock import shop_timezone, today_in_shop_tz
+
+    tz = shop_timezone()
+    today = today_in_shop_tz()
+    leg_start = datetime.combine(today, time(hour=11), tzinfo=tz).astimezone(timezone.utc)
+    booking = BookingModel(
+        customer_id=customer_identity["id"],
+        branch_id=seeded_branch,
+        booking_date=today,
+        status=BookingStatus.APPROVED,
+        total_price=5.0,
+    )
+    db_session.add(booking)
+    db_session.flush()
+    detail = BookingDetailModel(
+        booking_id=booking.id,
+        service_id=seeded_service,
+        staff_id=None,
+        start_time=leg_start,
+        end_time=leg_start + timedelta(minutes=30),
+        duration_min=30,
+        price=5.0,
+        status="PENDING",
+    )
+    db_session.add(detail)
+    db_session.commit()
+    cleanup_records.append(("bookings", booking.id))
+    cleanup_records.append(("booking_details", detail.id))
+
+    # Freeze "now" at 10:45 local: a 30' service + 10' guard would overlap the
+    # 11:00 unassigned leg, so the seat must be pushed to 11:30.
+    fixed_now = datetime.combine(today, time(hour=10, minute=45), tzinfo=tz).astimezone(
+        timezone.utc
+    )
+    monkeypatch.setattr(walkin_module, "now_utc", lambda: fixed_now)
+
+    options = walkin_module.find_walkin_options(db_session, seeded_branch, seeded_service)
+
+    staff_options = [o for o in options if o["staff_id"] == seeded_staff["staff_id"]]
+    assert staff_options, options
+    expected_seat = datetime.combine(today, time(hour=11, minute=30), tzinfo=tz).astimezone(
+        timezone.utc
+    )
+    assert staff_options[0]["start_time"] == expected_seat
