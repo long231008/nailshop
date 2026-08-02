@@ -30,7 +30,7 @@ code comments actually live.
 
 ## Dependency directions (the ones that matter)
 
-- `availability` → `allocation` (`expected_staff`, `bookable_at`) →
+- `availability` → `allocation` (`expected_staff`) →
   `capability` (`load_matrix`, `is_available`) → `services`/`staff` models.
   Kept one-way; `roster.py` duplicates the active-status list locally to
   avoid a cycle.

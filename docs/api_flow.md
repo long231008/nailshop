@@ -32,7 +32,7 @@ number of expected techs of that group (full capacity - appointment-only, no
 reserve); leg length is the slowest eligible tech's real minutes (capability
 matrix), grid-snapped.
 A preferred technician does not change which times are sellable - the wish
-is recorded on the booking and honoured at the nightly allocation. Candidate
+is recorded on the booking for a manager to grant by hand afterwards. Candidate
 starts run 09:00–17:30 inclusive; a 17:30 start may run past 18:00 closing
 by explicit choice.
 
