@@ -317,3 +317,62 @@ def test_availability_accepts_whole_cart_service_ids(
         start = datetime.fromisoformat(slot["start_time"])
         end = datetime.fromisoformat(slot["end_time"])
         assert (end - start) == timedelta(minutes=75)
+
+
+def test_design_quote_keeps_extension_price_and_minutes(
+    client,
+    admin_headers,
+    customer_headers,
+    customer_identity,
+    db_session,
+    seeded_branch,
+    seeded_addon_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """The quote replaces the service's BASE price only: a chosen length
+    extension keeps both its surcharge and its extra minutes."""
+    from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
+    from app.services.infrastructure.models import ServiceExtensionModel
+
+    extension = ServiceExtensionModel(
+        service_id=seeded_addon_service,
+        name="Extra long",
+        extra_price=4.0,
+        extra_duration_min=15,
+    )
+    db_session.add(extension)
+    design = CustomDesignModel(
+        customer_id=customer_identity["id"],
+        image_url="https://example.com/design.jpg",
+        description="Ombre with gems",
+        estimated_price=27.5,
+        status=CustomDesignStatus.PRICED,
+    )
+    db_session.add(design)
+    db_session.commit()
+    cleanup_records.append(("service_extensions", extension.id))
+    cleanup_records.append(("custom_designs", design.id))
+
+    payload = {
+        "branch_id": str(seeded_branch),
+        "items": [
+            {
+                "service_id": str(seeded_addon_service),
+                "service_extension_id": str(extension.id),
+                "start_time": seeded_shift["start"].isoformat(),
+                "custom_design_id": str(design.id),
+            }
+        ],
+    }
+    response = client.post("/app/bookings", json=payload, headers=customer_headers)
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    cleanup_records.append(("bookings", body["id"]))
+    cleanup_records.append(("booking_details", body["details"][0]["id"]))
+    # quote 27.5 + extension 4.0; base price is replaced, not added
+    assert body["total_price"] == 31.5
+    # 30' menu + 15' extension, grid-snapped
+    assert body["details"][0]["duration_min"] == 45

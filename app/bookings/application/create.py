@@ -119,6 +119,7 @@ def create_booking(
 
         price = Decimal(str(service.base_price))
         extra_minutes = 0
+        extension_price = Decimal("0")
 
         if item.service_extension_id is not None:
             extension = db.get(ServiceExtensionModel, item.service_extension_id)
@@ -127,7 +128,7 @@ def create_booking(
                     f"Service extension {item.service_extension_id} is invalid for this service"
                 )
             extra_minutes = extension.extra_duration_min
-            price += Decimal(str(extension.extra_price))
+            extension_price = Decimal(str(extension.extra_price))
 
         if item.custom_design_id is not None:
             design = db.get(CustomDesignModel, item.custom_design_id)
@@ -143,9 +144,12 @@ def create_booking(
                 )
             if any(p.get("custom_design_id") == design.id for p in prepared_items):
                 raise InvalidBookingItemsError("This design is already in the booking")
-            # The agreed quote replaces the service's base price.
+            # The agreed quote replaces the service's BASE price only - a
+            # chosen length extension keeps both its minutes and its price.
             price = Decimal(str(design.estimated_price))
             design.status = CustomDesignStatus.ACCEPTED
+
+        price += extension_price
 
         preferred_staff_id = None
         if item.staff_id is not None:

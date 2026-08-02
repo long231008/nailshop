@@ -12,7 +12,9 @@ from app.shared.infrastructure.database.session import get_db
 from app.webhooks.application.payment import (
     AmountMismatchError,
     BookingNotFoundError,
+    BookingNotPayableError,
     InvalidSignatureError,
+    RefundExceedsPaymentsError,
     process_payment_webhook,
     verify_signature,
 )
@@ -94,6 +96,20 @@ async def payment_webhook(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payment amount does not match the amount due",
+        )
+    except BookingNotPayableError:
+        # e.g. a deposit for a booking that was already cancelled by the
+        # expiry sweep - the customer must never be told it is confirmed.
+        if transaction_type == PaymentTransactionType.DEPOSIT:
+            _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=False)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This booking is not accepting payments in its current state",
+        )
+    except RefundExceedsPaymentsError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refund exceeds the amount paid for this booking",
         )
 
     if transaction_type == PaymentTransactionType.DEPOSIT:
