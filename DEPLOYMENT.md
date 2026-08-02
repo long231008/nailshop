@@ -13,9 +13,9 @@ header the app already sends is ignored by browsers unless the page is served
 over TLS.
 
 Terminate TLS at the ingress/proxy (Caddy, nginx, or a managed load balancer)
-and redirect all HTTP traffic to HTTPS. With Kubernetes, the manifests in `k8s/`
-expect cert-manager to issue the certificate; add the TLS block and the
-redirect annotation to `k8s/ingress.yaml`.
+and redirect all HTTP traffic to HTTPS. With Kubernetes, `k8s/ingress.yaml`
+already carries the TLS block and the redirect annotations; it expects
+cert-manager and a ClusterIssuer named `letsencrypt-prod`.
 
 Behind a proxy, also set:
 

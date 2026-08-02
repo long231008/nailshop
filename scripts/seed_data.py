@@ -2,7 +2,7 @@
 
 Run with: venv/Scripts/python.exe scripts/seed_data.py
 
-Static data (branches/services/staff/shifts) is safe to re-run -
+Static data (branches/services/staff) is safe to re-run -
 existing rows are reused instead of duplicated. Dynamic data (customers,
 bookings, payments, custom designs) is always added fresh
 so re-running gives you more sample activity to look at.

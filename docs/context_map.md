@@ -45,7 +45,7 @@ code comments actually live.
   soft-lock expiry every 60s; nightly allocation at `BOOKING_CLOSE_HOUR`
   (21:00 shop time) plus a 21:20 watchdog; all idempotent.
 
-## Data model (17 tables)
+## Data model (16 tables)
 
 `users` ← `staff` (1:1) ← `staff_capabilities`, `staff_day_assignments`,
 `staff_rosters`; `locations` ← `services` (nullable = global) ←
