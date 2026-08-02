@@ -85,7 +85,8 @@ class Settings(BaseSettings):
     def allowed_hosts_list(self) -> list[str]:
         if self.ALLOWED_HOSTS == "*":
             return ["*"]
-        # Health checks and load balancers often probe by IP or without a Host.
+        # Probes must send one of these Host headers: anything else gets a 400
+        # (see the httpHeaders on the k8s probes).
         return [host.strip() for host in self.ALLOWED_HOSTS.split(",") if host.strip()]
 
     @property
