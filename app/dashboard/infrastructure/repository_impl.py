@@ -60,9 +60,7 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
 
         if branch_id is None:
             active_staff_count = (
-                self._db.query(StaffModel)
-                .filter(StaffModel.status == StaffStatus.ACTIVE)
-                .count()
+                self._db.query(StaffModel).filter(StaffModel.status == StaffStatus.ACTIVE).count()
             )
         else:
             # Techs belong to the chain: today's headcount at a branch follows
@@ -94,6 +92,7 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
 
         deposit_types = [PaymentTransactionType.DEPOSIT]
         total_types = [PaymentTransactionType.DEPOSIT, PaymentTransactionType.FINAL_PAYMENT]
+        refund_types = [PaymentTransactionType.REFUND]
 
         def sum_since(transaction_types: list, since: datetime) -> float:
             query = (
@@ -109,6 +108,11 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
                 query = query.filter(BookingModel.branch_id == branch_id)
             return float(query.scalar() or 0)
 
+        def total_since(since: datetime) -> float:
+            # Money returned to customers is not revenue: refunds recorded by the
+            # payment webhook are subtracted so the totals reflect actual takings.
+            return sum_since(total_types, since) - sum_since(refund_types, since)
+
         return RevenueSummary(
             deposit_revenue=RevenueBreakdown(
                 today=sum_since(deposit_types, today_start),
@@ -117,9 +121,9 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
                 this_year=sum_since(deposit_types, year_start),
             ),
             total_revenue=RevenueBreakdown(
-                today=sum_since(total_types, today_start),
-                this_week=sum_since(total_types, week_start),
-                this_month=sum_since(total_types, month_start),
-                this_year=sum_since(total_types, year_start),
+                today=total_since(today_start),
+                this_week=total_since(week_start),
+                this_month=total_since(month_start),
+                this_year=total_since(year_start),
             ),
         )

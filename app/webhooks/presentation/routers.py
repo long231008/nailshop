@@ -16,7 +16,7 @@ from app.webhooks.application.payment import (
     process_payment_webhook,
     verify_signature,
 )
-from app.webhooks.infrastructure.models import PaymentTransactionType
+from app.webhooks.infrastructure.models import PaymentTransactionStatus, PaymentTransactionType
 from app.webhooks.presentation.schemas import PaymentWebhookPayload
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -103,8 +103,11 @@ async def payment_webhook(
         elif payload.status == "failed":
             _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=False)
 
+    # "processed" reports the stored outcome, not whether this call did new work:
+    # a replay of an already-recorded success must keep answering true, or a
+    # provider that retries until it sees true would retry forever.
     return {
         "status": "ok",
         "transaction_id": transaction.provider_transaction_id,
-        "processed": counts_as_paid,
+        "processed": transaction.status == PaymentTransactionStatus.SUCCESS,
     }

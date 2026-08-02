@@ -295,3 +295,75 @@ def test_complete_manual_final_price_and_bill(
     assert bill["total"] == 25.0
     assert bill["deposit"] == 6.0
     assert bill["remaining"] == 19.0
+
+
+def test_cancel_after_paid_deposit_flags_refund_in_audit(
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
+):
+    import hashlib
+    import hmac
+    import json
+
+    from app.shared.infrastructure.config.settings import settings
+
+    booking = _create_booking(
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
+        cleanup_records,
+    )
+    approve = client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers).json()
+
+    body = json.dumps(
+        {
+            "transaction_id": str(uuid_lib.uuid4()),
+            "booking_id": booking["id"],
+            "amount": approve["deposit_amount"],
+            "transaction_type": "deposit",
+        }
+    ).encode()
+    signature = hmac.new(settings.PAYMENT_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    paid = client.post(
+        "/app/webhooks/payment",
+        content=body,
+        headers={"X-Signature": signature, "Content-Type": "application/json"},
+    )
+    assert paid.status_code == 200
+
+    response = client.post(f"/app/bookings/{booking['id']}/cancel", headers=customer_headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+    from app.webhooks.infrastructure.models import PaymentTransactionModel
+
+    transaction = (
+        db_session.query(PaymentTransactionModel)
+        .filter(PaymentTransactionModel.booking_id == uuid_lib.UUID(booking["id"]))
+        .first()
+    )
+    cleanup_records.append(("payment_transactions", transaction.id))
+
+    log_entry = (
+        db_session.query(AuditLogModel)
+        .filter(
+            AuditLogModel.entity_id == uuid_lib.UUID(booking["id"]),
+            AuditLogModel.action == "booking.cancelled_by_customer",
+        )
+        .first()
+    )
+    cleanup_records.append(("audit_logs", log_entry.id))
+    # No automatic refund exists: the audit entry tells the salon money is owed.
+    assert log_entry.details["deposit_paid"] is True
+    assert log_entry.details["deposit_amount"] == approve["deposit_amount"]

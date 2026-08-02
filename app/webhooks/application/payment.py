@@ -25,7 +25,7 @@ class BookingNotFoundError(Exception):
 
 
 class AmountMismatchError(Exception):
-    def __init__(self, expected: Decimal, received: Decimal):
+    def __init__(self, expected: Decimal | None, received: Decimal):
         self.expected = expected
         self.received = received
         super().__init__(f"expected {expected}, received {received}")
@@ -78,9 +78,13 @@ def process_payment_webhook(
 
     # A "successful" payment that does not cover what is owed must not unlock the
     # booking. It is recorded as FAILED so there is still a trace of the attempt.
+    # A deposit for a booking that was never approved has no amount due at all -
+    # accepting it would mark the booking as paid forever (the expiry sweep treats
+    # any SUCCESS deposit as proof of payment), so it is refused the same way.
     if succeeded:
         expected = _expected_amount(booking, transaction_type)
-        if expected is not None and received < expected:
+        no_deposit_due = transaction_type == PaymentTransactionType.DEPOSIT and expected is None
+        if no_deposit_due or (expected is not None and received < expected):
             transaction = PaymentTransactionModel(
                 booking_id=booking_id,
                 provider_transaction_id=transaction_id,

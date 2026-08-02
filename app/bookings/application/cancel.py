@@ -13,6 +13,11 @@ from app.bookings.application.exceptions import (
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
 from app.shared.infrastructure.clock import now_utc, shop_timezone
+from app.webhooks.infrastructure.models import (
+    PaymentTransactionModel,
+    PaymentTransactionStatus,
+    PaymentTransactionType,
+)
 
 
 def release_designs(db: Session, booking_id) -> None:
@@ -78,12 +83,30 @@ def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingM
     for detail in named_details:
         day = detail.start_time.astimezone(shop_timezone()).date()
         release_pin_if_unused(db, detail.staff_id, day)
+    # There is no automatic refund: if the deposit was already taken, the audit
+    # entry flags it so the salon knows a refund decision is owed to the customer.
+    deposit_paid = (
+        db.query(PaymentTransactionModel)
+        .filter(
+            PaymentTransactionModel.booking_id == booking.id,
+            PaymentTransactionModel.transaction_type == PaymentTransactionType.DEPOSIT,
+            PaymentTransactionModel.status == PaymentTransactionStatus.SUCCESS,
+        )
+        .first()
+        is not None
+    )
     db.add(
         AuditLogModel(
             actor_user_id=customer_id,
             action="booking.cancelled_by_customer",
             entity_type="booking",
             entity_id=booking.id,
+            details={
+                "deposit_paid": deposit_paid,
+                "deposit_amount": float(booking.deposit_amount)
+                if deposit_paid and booking.deposit_amount is not None
+                else None,
+            },
         )
     )
     db.commit()

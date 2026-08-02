@@ -105,6 +105,11 @@ class Settings(BaseSettings):
             problems.append("NOTIFICATION_BACKEND=null (nothing is actually delivered)")
         if len(self.JWT_SECRET_KEY) < 32:
             problems.append("JWT_SECRET_KEY is shorter than 32 characters")
+        if self.PAYMENT_WEBHOOK_SECRET == "dev-payment-webhook-secret":
+            problems.append(
+                "PAYMENT_WEBHOOK_SECRET is the development default (forged payment "
+                "webhooks would be accepted)"
+            )
         return problems
 
 

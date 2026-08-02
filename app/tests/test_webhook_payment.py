@@ -150,7 +150,9 @@ def test_webhook_is_idempotent_on_replay(
     assert first.status_code == 200
     assert first.json()["processed"] is True
     assert second.status_code == 200
-    assert second.json()["processed"] is False
+    # A replay reports the stored outcome: still processed, so a provider that
+    # retries until it sees true stops retrying.
+    assert second.json()["processed"] is True
 
     from app.webhooks.infrastructure.models import PaymentTransactionModel
 
@@ -160,3 +162,64 @@ def test_webhook_is_idempotent_on_replay(
         .first()
     )
     cleanup_records.append(("payment_transactions", transaction.id))
+
+
+def test_webhook_rejects_deposit_before_approval(
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
+):
+    # No approve step: the booking has no deposit_amount, so nothing is due yet.
+    payload = {
+        "branch_id": str(seeded_branch),
+        "items": [
+            {
+                "service_id": str(seeded_service),
+                "staff_id": str(seeded_staff["staff_id"]),
+                "start_time": seeded_shift["start"].isoformat(),
+            }
+        ],
+    }
+    booking = client.post("/app/bookings", json=payload, headers=customer_headers).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    transaction_id = str(uuid.uuid4())
+    body = json.dumps(
+        {
+            "transaction_id": transaction_id,
+            "booking_id": booking["id"],
+            "amount": 6.0,
+            "transaction_type": "deposit",
+        }
+    ).encode()
+
+    response = client.post(
+        "/app/webhooks/payment",
+        content=body,
+        headers={"X-Signature": _sign(body), "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+
+    from app.bookings.infrastructure.models import BookingModel, BookingStatus
+    from app.webhooks.infrastructure.models import (
+        PaymentTransactionModel,
+        PaymentTransactionStatus,
+    )
+
+    transaction = (
+        db_session.query(PaymentTransactionModel)
+        .filter(PaymentTransactionModel.provider_transaction_id == transaction_id)
+        .first()
+    )
+    cleanup_records.append(("payment_transactions", transaction.id))
+    # Recorded as FAILED, so the expiry sweep does not treat it as a paid deposit.
+    assert transaction.status == PaymentTransactionStatus.FAILED
+    refreshed = db_session.get(BookingModel, uuid.UUID(booking["id"]))
+    assert refreshed.status == BookingStatus.PENDING
