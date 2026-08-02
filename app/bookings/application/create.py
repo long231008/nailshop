@@ -186,9 +186,7 @@ def create_booking(
         # nightly allocation picks the tech and shrinks the leg (doc 4.3).
         minutes = planning_minutes(db, payload.branch_id, service.id, booking_date)
         if minutes is None:
-            raise InvalidBookingItemsError(
-                f"'{service.name}' is not available on this day"
-            )
+            raise InvalidBookingItemsError(f"'{service.name}' is not available on this day")
         duration_min = ceil_to_grid(minutes + extra_minutes)
         start_time = cursor
         end_time = start_time + timedelta(minutes=duration_min)
@@ -228,9 +226,7 @@ def create_booking(
         cursor = end_time  # items run back-to-back: one customer, one chair
 
     if capacity_legs and not ledger.fits(capacity_legs, service_caps):
-        raise InvalidBookingItemsError(
-            "This time no longer has room - please pick another time"
-        )
+        raise InvalidBookingItemsError("This time no longer has room - please pick another time")
 
     existing_minutes = (
         db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))

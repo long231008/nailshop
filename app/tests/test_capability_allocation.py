@@ -88,9 +88,7 @@ def test_matrix_roundtrip_and_real_minutes_scheduling(
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"]])
 
 
-def test_matrix_rejects_a_typo_beyond_3x_menu(
-    client, admin_headers, seeded_service, seeded_staff
-):
+def test_matrix_rejects_a_typo_beyond_3x_menu(client, admin_headers, seeded_service, seeded_staff):
     save = client.put(
         "/app/capability/matrix",
         json={
@@ -258,9 +256,7 @@ def test_step_a_places_every_available_tech(
     finally:
         # solve_day touches every active tech in the dev database - remove the
         # whole day's assignments so no side effects outlive the test.
-        db_session.execute(
-            text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day}
-        )
+        db_session.execute(text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day})
         db_session.commit()
 
 
@@ -335,9 +331,7 @@ def test_preference_is_ignored_by_allocator_and_granted_by_hand(
         params={"target_date": day.isoformat(), "branch_id": str(seeded_branch)},
         headers=admin_headers,
     ).json()
-    entry = next(
-        p for p in status_body["preferences"] if p["booking_detail_id"] == detail_id
-    )
+    entry = next(p for p in status_body["preferences"] if p["booking_detail_id"] == detail_id)
     assert entry["preferred_staff_id"] == str(seeded_staff["staff_id"])
     assert entry["assigned_staff_id"] == str(second_staff.id)
     assert entry["honoured"] is False
@@ -426,7 +420,6 @@ def test_matrix_save_replaces_only_staff_in_payload(
     assert matrix[first_id][service_id] == 30
 
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"], second_staff.id])
-
 
 
 def test_weekly_hours_ceiling_blocks_assignment_and_reassign(

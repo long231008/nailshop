@@ -77,9 +77,7 @@ def reassign_leg(
     # One tech, one salon per day: the target must stand at this branch.
     roster = expected_staff(db, booking.branch_id, day)
     if staff.id not in {member.id for member in roster}:
-        raise ReassignNotAllowedError(
-            "The staff member is not at this branch on that day"
-        )
+        raise ReassignNotAllowedError("The staff member is not at this branch on that day")
 
     matrix = load_matrix(db)
     minutes = matrix.get(staff.id, {}).get(service.id)

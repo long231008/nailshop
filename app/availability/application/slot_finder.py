@@ -126,9 +126,7 @@ def find_available_slots(
 
     ledger = CapacityLedger(db, branch_id, target_date)
     service_caps = {
-        service.id: rare_service_cap(
-            len(eligible_staff(db, branch_id, service.id, target_date))
-        )
+        service.id: rare_service_cap(len(eligible_staff(db, branch_id, service.id, target_date)))
         for service in services
     }
 

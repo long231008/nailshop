@@ -263,4 +263,3 @@ def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tup
     ]
     windows.sort()
     return windows
-

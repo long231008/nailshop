@@ -33,9 +33,7 @@ def second_staff(db_session, cleanup_records, seeded_branch):
 def _wipe_day_assignments(db_session, day):
     # solve_day places every active tech in the shared dev database; remove the
     # whole day's rows so nothing outlives the test.
-    db_session.execute(
-        text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day}
-    )
+    db_session.execute(text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day})
     db_session.commit()
 
 
@@ -44,9 +42,7 @@ def _any_tech_booking(client, customer_headers, seeded_branch, seeded_service, s
         "/app/bookings",
         json={
             "branch_id": str(seeded_branch),
-            "items": [
-                {"service_id": str(seeded_service), "start_time": start.isoformat()}
-            ],
+            "items": [{"service_id": str(seeded_service), "start_time": start.isoformat()}],
         },
         headers=customer_headers,
     )

@@ -115,7 +115,6 @@ def test_customer_can_view_own_status_but_not_others(
     assert other.status_code == 403
 
 
-
 def _move_leg_to_today(db_session, detail_id, hour):
     """start_service only accepts today's legs; tests book 2 days out to dodge
     the 21:00 freeze, so slide the leg back to today before starting it."""

@@ -73,4 +73,3 @@ class ReassignResponse(BaseModel):
     staff_name: str
     start_time: datetime
     end_time: datetime
-

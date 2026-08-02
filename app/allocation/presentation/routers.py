@@ -67,9 +67,7 @@ def run_allocation(
     runs = []
     for branch_id in branch_ids:
         if payload.release_staff_id is not None:
-            release_staff_assignments(
-                db, payload.release_staff_id, branch_id, payload.target_date
-            )
+            release_staff_assignments(db, payload.release_staff_id, branch_id, payload.target_date)
         runs.append(materialize_day(db, branch_id, payload.target_date))
     return [_run_response(run) for run in runs]
 
@@ -81,9 +79,7 @@ def allocation_status(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> AllocationStatusResponse:
-    runs_query = db.query(AllocationRunModel).filter(
-        AllocationRunModel.target_date == target_date
-    )
+    runs_query = db.query(AllocationRunModel).filter(AllocationRunModel.target_date == target_date)
     if branch_id is not None:
         runs_query = runs_query.filter(AllocationRunModel.branch_id == branch_id)
     runs = runs_query.order_by(AllocationRunModel.created_at.desc()).all()
@@ -131,9 +127,7 @@ def allocation_status(
             start_time=detail.start_time,
             end_time=detail.end_time,
         )
-        for detail, service_name in unassigned_query.order_by(
-            BookingDetailModel.start_time
-        ).all()
+        for detail, service_name in unassigned_query.order_by(BookingDetailModel.start_time).all()
     ]
     # Customer wishes next to the machine's decisions: the allocator ignores
     # preferences on purpose - a manager grants them here, by hand.
@@ -217,4 +211,3 @@ def reassign(
         start_time=detail.start_time,
         end_time=detail.end_time,
     )
-

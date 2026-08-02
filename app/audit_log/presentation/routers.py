@@ -27,9 +27,7 @@ def list_audit_log(
     if to is not None:
         query = query.filter(AuditLogModel.created_at <= to)
 
-    entries = (
-        query.order_by(AuditLogModel.created_at.desc()).limit(limit).offset(offset).all()
-    )
+    entries = query.order_by(AuditLogModel.created_at.desc()).limit(limit).offset(offset).all()
     return [
         AuditLogEntry(
             id=e.id,

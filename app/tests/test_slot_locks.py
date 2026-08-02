@@ -318,9 +318,7 @@ def test_sunday_booking_is_rejected_with_facebook_hint(
     assert "Facebook" in response.json()["detail"]
 
 
-def test_booking_horizon_limits_the_calendar(
-    client, seeded_staff, seeded_service, seeded_shift
-):
+def test_booking_horizon_limits_the_calendar(client, seeded_staff, seeded_service, seeded_shift):
     # Within the horizon: open, and slots sit on the quarter-hour grid.
     near = seeded_shift["start"].date()
     response = client.get(

@@ -151,9 +151,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             continue
 
         booking_staff = {
-            d.staff_id
-            for d, b, _s in rows
-            if b.id == booking.id and d.staff_id is not None
+            d.staff_id for d, b, _s in rows if b.id == booking.id and d.staff_id is not None
         }
         candidates = []
         for staff in staff_list:

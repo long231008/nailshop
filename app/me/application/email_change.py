@@ -64,9 +64,7 @@ def confirm_email_change(
 
     email, expected_code = pending
     if not hmac.compare_digest(expected_code, code):
-        attempts = otp_repository.register_email_change_attempt(
-            user_id, EMAIL_CHANGE_TTL_SECONDS
-        )
+        attempts = otp_repository.register_email_change_attempt(user_id, EMAIL_CHANGE_TTL_SECONDS)
         if attempts >= MAX_EMAIL_CHANGE_ATTEMPTS:
             otp_repository.delete_email_change(user_id)
             raise EmailChangeTooManyAttemptsError()

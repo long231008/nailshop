@@ -79,8 +79,7 @@ def get_matrix_payload(db: Session) -> dict:
         "staff": staff_list,
         "capability": {
             str(staff.id): {
-                str(service_id): minutes
-                for service_id, minutes in matrix.get(staff.id, {}).items()
+                str(service_id): minutes for service_id, minutes in matrix.get(staff.id, {}).items()
             }
             for staff in staff_list
         },
@@ -132,9 +131,7 @@ def save_matrix(
         ).delete(synchronize_session=False)
     for staff_id, cells in capability.items():
         for service_id, minutes in cells.items():
-            db.add(
-                StaffCapabilityModel(staff_id=staff_id, service_id=service_id, minutes=minutes)
-            )
+            db.add(StaffCapabilityModel(staff_id=staff_id, service_id=service_id, minutes=minutes))
 
     warnings = []
     # Coverage is judged on the merged result: payload rows plus the untouched

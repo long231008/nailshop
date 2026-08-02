@@ -61,9 +61,7 @@ def expected_staff(db: Session, branch_id: UUID, day: date_type) -> list[StaffMo
     available = [staff for staff in active if is_available(staff, day)]
     assignments = {
         a.staff_id: a.branch_id
-        for a in db.query(StaffDayAssignmentModel)
-        .filter(StaffDayAssignmentModel.day == day)
-        .all()
+        for a in db.query(StaffDayAssignmentModel).filter(StaffDayAssignmentModel.day == day).all()
     }
 
     expected = []
@@ -108,9 +106,7 @@ def _demand_minutes(db: Session, day: date_type) -> dict[UUID, dict[str, int]]:
     )
     demand: dict[UUID, dict[str, int]] = {}
     for branch_id, group, minutes in rows:
-        demand.setdefault(branch_id, {})[group] = (
-            demand.get(branch_id, {}).get(group, 0) + minutes
-        )
+        demand.setdefault(branch_id, {})[group] = demand.get(branch_id, {}).get(group, 0) + minutes
     return demand
 
 
@@ -159,16 +155,12 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
         StaffDayAssignmentModel.day == day,
     )
     if anchored:
-        delete_query = delete_query.filter(
-            StaffDayAssignmentModel.staff_id.notin_(anchored.keys())
-        )
+        delete_query = delete_query.filter(StaffDayAssignmentModel.staff_id.notin_(anchored.keys()))
     delete_query.delete(synchronize_session=False)
     db.flush()
     kept_rows = {
         a.staff_id
-        for a in db.query(StaffDayAssignmentModel)
-        .filter(StaffDayAssignmentModel.day == day)
-        .all()
+        for a in db.query(StaffDayAssignmentModel).filter(StaffDayAssignmentModel.day == day).all()
     }
 
     branches = list(db.query(LocationModel).order_by(LocationModel.created_at, LocationModel.id))
@@ -266,6 +258,4 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
         )
 
     db.flush()
-    return (
-        db.query(StaffDayAssignmentModel).filter(StaffDayAssignmentModel.day == day).all()
-    )
+    return db.query(StaffDayAssignmentModel).filter(StaffDayAssignmentModel.day == day).all()
