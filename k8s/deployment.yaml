@@ -24,6 +24,14 @@ spec:
                 name: nailshop-config
             - secretRef:
                 name: nailshop-secrets
+          # The container runs "alembic upgrade head" before uvicorn; the
+          # startup probe gives migrations up to ~150s before liveness kicks in.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /health
@@ -43,3 +51,26 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+          volumeMounts:
+            # Design photos land here when Cloudinary is not configured; without
+            # a shared volume each replica keeps its own files and loses them on
+            # restart. RWO works on the single-node kind demo - a multi-node
+            # cluster needs RWX storage or (better) real Cloudinary credentials.
+            - name: uploads-data
+              mountPath: /code/uploads
+      volumes:
+        - name: uploads-data
+          persistentVolumeClaim:
+            claimName: uploads-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uploads-data
+  namespace: nailshop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
