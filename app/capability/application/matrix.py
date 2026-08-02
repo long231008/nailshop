@@ -109,7 +109,7 @@ def save_matrix(
     must never wipe the rest of the chain's matrix.)
 
     Returns (warnings, affected_bookings). Removing a (tech, service) cell that a
-    future pinned booking relies on does not silently fix anything - the affected
+    future assigned booking relies on does not silently fix anything - the affected
     bookings are reported so reception can call the customers (doc 1.1 rule 4).
     """
     services = {service.id: service for service in db.query(ServiceModel).all()}
@@ -146,7 +146,7 @@ def save_matrix(
         if service.id not in covered:
             warnings.append(f"No technician can do '{service.name}' - it cannot be sold")
 
-    # on_capability_change: future bookings pinned to a (tech, service) pair whose
+    # on_capability_change: future bookings assigned to a (tech, service) pair whose
     # cell was just removed need a human decision, never a silent reassignment.
     # Only technicians present in the payload can lose cells.
     removed_pairs = {

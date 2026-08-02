@@ -3,7 +3,7 @@
 Lists the times where every leg of the visit still fits under the lane caps -
 no technician is named or reserved; that happens at the nightly close. A
 preferred technician does not change which times are sellable: the wish is
-recorded on the booking and honoured at allocation time when possible.
+recorded on the booking for a manager to grant by hand afterwards.
 """
 
 from datetime import date as date_type

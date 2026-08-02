@@ -51,7 +51,7 @@ def assignment_for(db: Session, staff_id: UUID, day: date_type) -> StaffDayAssig
 
 
 def expected_staff(db: Session, branch_id: UUID, day: date_type) -> list[StaffModel]:
-    """The staffing plan for one branch-day, in three layers (see module doc)."""
+    """The staffing plan for one branch-day (see module doc)."""
     active = (
         db.query(StaffModel)
         .filter(StaffModel.status == StaffStatus.ACTIVE)

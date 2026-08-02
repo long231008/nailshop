@@ -152,7 +152,7 @@ manage slot locks at their own branch.
   tech per service; a missing cell means "never assign"). Saves replace one
   technician's row at a time — staff absent from the payload keep their
   cells. Validation: 5–240 minutes and ≤3× menu duration. The save reports
-  services nobody can perform and future pinned bookings whose cell was
+  services nobody can perform and future assigned bookings whose cell was
   removed, for reception to phone.
 - **Staffing**: `POST /admin/staff`, grant/revoke staff on users, block
   (clears future rosters, unassigns future pending legs), activate, reserve,

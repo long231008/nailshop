@@ -15,6 +15,8 @@ class DailyBookingLimitExceededError(Exception):
 
 
 class StaffConflictError(Exception):
+    """The salon closed this time: a branch-wide slot lock covers the visit."""
+
     pass
 
 

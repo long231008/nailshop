@@ -83,8 +83,8 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     configured = matrix_configured_for(staff_list, matrix)
     rows = _day_details(db, branch_id, target_date)
 
-    # Personal timelines and the day's turn ledger start from what is already
-    # pinned (named-tech bookings joined the timeline at booking time, doc 3.3b).
+    # Personal timelines and the day's turn ledger start from legs that already
+    # have a technician: an earlier run of this job, or a manual reassignment.
     timelines: dict[UUID, list] = {staff.id: [] for staff in staff_list}
     turns: dict[UUID, float] = {staff.id: 0.0 for staff in staff_list}
     last_finish: dict[UUID, object] = {}

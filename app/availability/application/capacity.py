@@ -264,6 +264,3 @@ def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tup
     windows.sort()
     return windows
 
-
-def is_window_free(busy: list[tuple], start: datetime, end: datetime) -> bool:
-    return all(b_end <= start or b_start >= end for b_start, b_end in busy)

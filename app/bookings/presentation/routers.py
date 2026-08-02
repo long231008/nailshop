@@ -91,7 +91,7 @@ def create_booking_endpoint(
     except StaffConflictError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="The requested staff member is not available at this time",
+            detail="This time is not available at this salon",
         )
     except DailyBookingLimitExceededError:
         raise HTTPException(

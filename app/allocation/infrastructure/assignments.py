@@ -12,10 +12,8 @@ from app.shared.infrastructure.database.base import Base
 
 
 class AssignmentSource(str, Enum):
-    # A customer booked this technician by name: the exclusive pin registry
-    # (doc 3.3b) - first booking wins, one tech works at most one salon a day.
-    PIN = "pin"
-    # Step A of the nightly allocation placed the technician here.
+    # Step A of the nightly allocation placed the technician here. This is the
+    # only writer today - customer wishes never claim a technician or a branch.
     AUTO = "auto"
 
 
