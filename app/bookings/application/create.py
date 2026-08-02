@@ -1,10 +1,11 @@
 """Create an advance booking on the capacity ledger (doc 3.3b).
 
-The customer commits to *salon + time + services + price*. Any-tech items keep
-staff_id NULL and hold the cautious planning duration; the nightly allocation
-names the technician and shrinks each leg to that tech's real minutes. Items
-naming a technician are checked against - and written onto - that tech's
-personal timeline immediately, with their real minutes from the matrix.
+The customer commits to *salon + time + services + price*. Every item keeps
+staff_id NULL and holds the cautious planning duration; the nightly allocation
+names the technician and shrinks each leg to that tech's real minutes. Naming
+a technician records a *note for the salon*: the allocator ignores it and
+stays free to optimise, and a manager grants the wish by hand afterwards
+when the finished schedule allows (/allocation/reassign).
 """
 
 import logging
@@ -15,22 +16,15 @@ from uuid import UUID
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.allocation.application.roster import (
-    PinConflictError,
-    bookable_at,
-    create_pin,
-    expected_staff,
-)
+from app.allocation.application.roster import expected_staff
 from app.availability.application.capacity import (
     BookingWindow,
     CapacityLedger,
     booking_window_state,
     eligible_staff,
-    is_window_free,
     matrix_configured_for,
     planning_minutes,
     rare_service_cap,
-    staff_timeline_busy,
 )
 from app.bookings.application.exceptions import (
     DailyBookingLimitExceededError,
@@ -64,7 +58,7 @@ ACTIVE_BOOKING_STATUSES = [
 WINDOW_MESSAGES = {
     BookingWindow.CLOSED: (
         "Bookings for this day have closed (they close at 21:00 the evening "
-        "before). Please walk in, or pick a later day."
+        "before). Please pick a later day, or contact the salon."
     ),
     BookingWindow.TOO_FAR: "This date is beyond the booking horizon",
     BookingWindow.CLOSED_DAY: (
@@ -106,7 +100,6 @@ def create_booking(
     _lock_branch(db, payload.branch_id)
 
     ledger = CapacityLedger(db, payload.branch_id, booking_date)
-    timelines: dict[UUID, list] = {}
 
     prepared_items = []
     capacity_legs = []
@@ -126,6 +119,7 @@ def create_booking(
 
         price = Decimal(str(service.base_price))
         extra_minutes = 0
+        extension_price = Decimal("0")
 
         if item.service_extension_id is not None:
             extension = db.get(ServiceExtensionModel, item.service_extension_id)
@@ -134,7 +128,7 @@ def create_booking(
                     f"Service extension {item.service_extension_id} is invalid for this service"
                 )
             extra_minutes = extension.extra_duration_min
-            price += Decimal(str(extension.extra_price))
+            extension_price = Decimal(str(extension.extra_price))
 
         if item.custom_design_id is not None:
             design = db.get(CustomDesignModel, item.custom_design_id)
@@ -150,14 +144,19 @@ def create_booking(
                 )
             if any(p.get("custom_design_id") == design.id for p in prepared_items):
                 raise InvalidBookingItemsError("This design is already in the booking")
-            # The agreed quote replaces the service's base price.
+            # The agreed quote replaces the service's BASE price only - a
+            # chosen length extension keeps both its minutes and its price.
             price = Decimal(str(design.estimated_price))
             design.status = CustomDesignStatus.ACCEPTED
 
+        price += extension_price
+
+        preferred_staff_id = None
         if item.staff_id is not None:
-            # Named technician: real minutes, personal timeline (doc 1.1 rule 1).
-            # Techs belong to the chain - the request pins them to this salon
-            # for the whole day, first booking wins (doc 3.3b).
+            # Preferred technician (doc 3.3b, softened): a note for the salon,
+            # never an input to the allocator. Only wishes that can possibly
+            # come true are accepted, so the manager reviewing them later is
+            # not chasing the impossible.
             staff = (
                 db.query(StaffModel)
                 .filter(
@@ -170,86 +169,40 @@ def create_booking(
                 raise InvalidBookingItemsError(
                     "The requested staff member is not working on this day"
                 )
-            if not bookable_at(db, staff, payload.branch_id, booking_date):
-                raise InvalidBookingItemsError(
-                    "The requested staff member is already booked at another "
-                    "salon that day - pick another day or another technician"
-                )
             matrix = load_matrix(db)
             staff_cells = matrix.get(staff.id, {})
-            minutes = staff_cells.get(service.id)
-            if minutes is None:
-                if staff_cells or matrix_configured_for(
+            if service.id not in staff_cells and (
+                staff_cells
+                or matrix_configured_for(
                     expected_staff(db, payload.branch_id, booking_date), matrix
-                ):
-                    raise InvalidBookingItemsError(
-                        "The requested staff member does not offer this service"
-                    )
-                minutes = service.duration_min  # matrix not filled in yet
-            duration_min = ceil_to_grid(minutes + extra_minutes)
-            start_time = cursor
-            end_time = start_time + timedelta(minutes=duration_min)
-            hold_end = end_time + timedelta(minutes=service.buffer_after_min)
-            if item.staff_id not in timelines:
-                timelines[item.staff_id] = staff_timeline_busy(db, item.staff_id, booking_date)
-            if is_interval_locked(db, payload.branch_id, staff.id, start_time, end_time):
-                raise StaffConflictError()
-            if not is_window_free(timelines[item.staff_id], start_time, hold_end):
-                raise StaffConflictError()
-            # Weekly hours guard (fix #4): a pin must never promise hours the
-            # tech no longer has.
-            week_start = booking_date - timedelta(days=booking_date.weekday())
-            committed = (
-                db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))
-                .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
-                .filter(
-                    BookingDetailModel.staff_id == staff.id,
-                    BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
-                    BookingModel.booking_date >= week_start,
-                    BookingModel.booking_date < week_start + timedelta(days=7),
                 )
-                .scalar()
-            )
-            if committed + duration_min > staff.max_hours_week * 60:
+            ):
                 raise InvalidBookingItemsError(
-                    "The requested staff member has no hours left that week - "
-                    "pick another technician or another week"
+                    "The requested staff member does not offer this service"
                 )
-            try:
-                create_pin(db, staff.id, payload.branch_id, booking_date)
-            except PinConflictError:
-                raise InvalidBookingItemsError(
-                    "The requested staff member is already booked at another "
-                    "salon that day - pick another day or another technician"
-                )
-            timelines[item.staff_id].append((start_time, hold_end))
-            timelines[item.staff_id].sort()
-            staff_id = staff.id
-        else:
-            # Any-tech: hold a lane with the cautious planning duration; the
-            # nightly allocation picks the tech and shrinks the leg (doc 4.3).
-            minutes = planning_minutes(db, payload.branch_id, service.id, booking_date)
-            if minutes is None:
-                raise InvalidBookingItemsError(
-                    f"'{service.name}' is not available on this day"
-                )
-            duration_min = ceil_to_grid(minutes + extra_minutes)
-            start_time = cursor
-            end_time = start_time + timedelta(minutes=duration_min)
-            if is_interval_locked(db, payload.branch_id, None, start_time, end_time):
-                raise StaffConflictError()
-            capacity_legs.append(
-                {
-                    "service_id": service.id,
-                    "skill_group": service.skill_group,
-                    "start": start_time,
-                    "end": end_time + timedelta(minutes=service.buffer_after_min),
-                }
-            )
-            service_caps[service.id] = rare_service_cap(
-                len(eligible_staff(db, payload.branch_id, service.id, booking_date))
-            )
-            staff_id = None
+            preferred_staff_id = staff.id
+
+        # Every visit holds a lane with the cautious planning duration; the
+        # nightly allocation picks the tech and shrinks the leg (doc 4.3).
+        minutes = planning_minutes(db, payload.branch_id, service.id, booking_date)
+        if minutes is None:
+            raise InvalidBookingItemsError(f"'{service.name}' is not available on this day")
+        duration_min = ceil_to_grid(minutes + extra_minutes)
+        start_time = cursor
+        end_time = start_time + timedelta(minutes=duration_min)
+        if is_interval_locked(db, payload.branch_id, None, start_time, end_time):
+            raise StaffConflictError()
+        capacity_legs.append(
+            {
+                "service_id": service.id,
+                "skill_group": service.skill_group,
+                "start": start_time,
+                "end": end_time + timedelta(minutes=service.buffer_after_min),
+            }
+        )
+        service_caps[service.id] = rare_service_cap(
+            len(eligible_staff(db, payload.branch_id, service.id, booking_date))
+        )
 
         # Every leg must still *start* within booking hours; a long visit may
         # then run past closing - that's the salon's explicit choice.
@@ -260,8 +213,7 @@ def create_booking(
             {
                 "service_id": service.id,
                 "service_extension_id": item.service_extension_id,
-                "staff_id": staff_id,
-                "staff_requested": item.staff_id is not None,
+                "preferred_staff_id": preferred_staff_id,
                 "custom_design_id": item.custom_design_id,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -274,9 +226,7 @@ def create_booking(
         cursor = end_time  # items run back-to-back: one customer, one chair
 
     if capacity_legs and not ledger.fits(capacity_legs, service_caps):
-        raise InvalidBookingItemsError(
-            "This time no longer has room - please pick another time"
-        )
+        raise InvalidBookingItemsError("This time no longer has room - please pick another time")
 
     existing_minutes = (
         db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))

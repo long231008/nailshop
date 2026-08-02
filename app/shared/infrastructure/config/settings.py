@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -43,9 +43,6 @@ class Settings(BaseSettings):
     # nightly allocation can assign technicians to a demand that no longer moves.
     BOOKING_HORIZON_DAYS: int = 14
     BOOKING_CLOSE_HOUR: int = 21
-    # Share of expected technicians that may be sold per 15' slot; the remainder
-    # is the walk-in lane plus the staffing-surprise cushion.
-    CAP_FILL: float = 0.85
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.
     # "live" delivers for real: SMS to phone numbers, email to addresses.
@@ -75,8 +72,9 @@ class Settings(BaseSettings):
     TRUST_PROXY_HEADERS: bool = False
     SQL_ECHO: bool = False
 
-    class Config:
-        env_file = ".env"
+    # extra="ignore": an unrecognised key in .env must not stop the app from
+    # booting - people park notes and tool variables in that file.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:
@@ -88,7 +86,8 @@ class Settings(BaseSettings):
     def allowed_hosts_list(self) -> list[str]:
         if self.ALLOWED_HOSTS == "*":
             return ["*"]
-        # Health checks and load balancers often probe by IP or without a Host.
+        # Probes must send one of these Host headers: anything else gets a 400
+        # (see the httpHeaders on the k8s probes).
         return [host.strip() for host in self.ALLOWED_HOSTS.split(",") if host.strip()]
 
     @property
@@ -105,6 +104,11 @@ class Settings(BaseSettings):
             problems.append("NOTIFICATION_BACKEND=null (nothing is actually delivered)")
         if len(self.JWT_SECRET_KEY) < 32:
             problems.append("JWT_SECRET_KEY is shorter than 32 characters")
+        if self.PAYMENT_WEBHOOK_SECRET == "dev-payment-webhook-secret":
+            problems.append(
+                "PAYMENT_WEBHOOK_SECRET is the development default (forged payment "
+                "webhooks would be accepted)"
+            )
         return problems
 
 

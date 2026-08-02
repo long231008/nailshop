@@ -49,6 +49,7 @@ class RedisOtpRepository(OtpRepository):
         # The address only reaches the user row once the code comes back.
         self._redis.hset(self._email_change_key(user_id), mapping={"email": email, "code": code})
         self._redis.expire(self._email_change_key(user_id), ttl_seconds)
+        self._redis.delete(self._email_change_attempts_key(user_id))
 
     def get_email_change(self, user_id: UUID) -> tuple[str, str] | None:
         data = self._redis.hgetall(self._email_change_key(user_id))
@@ -58,3 +59,14 @@ class RedisOtpRepository(OtpRepository):
 
     def delete_email_change(self, user_id: UUID) -> None:
         self._redis.delete(self._email_change_key(user_id))
+        self._redis.delete(self._email_change_attempts_key(user_id))
+
+    def _email_change_attempts_key(self, user_id: UUID) -> str:
+        return f"email_change_attempts:{user_id}"
+
+    def register_email_change_attempt(self, user_id: UUID, ttl_seconds: int) -> int:
+        key = self._email_change_attempts_key(user_id)
+        attempts = self._redis.incr(key)
+        if attempts == 1:
+            self._redis.expire(key, ttl_seconds)
+        return attempts

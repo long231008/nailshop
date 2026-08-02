@@ -155,6 +155,7 @@ def test_admin_sees_booking_count_and_each_booking(
     seeded_staff,
     seeded_shift,
     cleanup_records,
+    db_session,
 ):
     booking = client.post(
         "/app/bookings",
@@ -172,6 +173,13 @@ def test_admin_sees_booking_count_and_each_booking(
     ).json()
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
 
     listing = client.get("/app/admin/users", headers=admin_headers).json()
     entry = next(u for u in listing if u["id"] == str(customer_identity["id"]))
@@ -274,3 +282,30 @@ def test_admin_cannot_delete_self_or_other_admin(
         f"/app/admin/users/{other_admin.id}", headers=admin_identity["headers"]
     )
     assert response.status_code == 400
+
+
+def test_demoting_staff_role_blocks_their_staff_profile(
+    client, admin_headers, seeded_staff, db_session, cleanup_records
+):
+    from app.staff.infrastructure.models import StaffModel, StaffStatus
+
+    response = client.patch(
+        f"/app/admin/users/{seeded_staff['user_id']}",
+        json={"role": "customer"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["role"] == "customer"
+
+    staff = db_session.get(StaffModel, seeded_staff["staff_id"])
+    db_session.refresh(staff)
+    assert staff.status == StaffStatus.BLOCKED
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+
+    for entry in (
+        db_session.query(AuditLogModel)
+        .filter(AuditLogModel.entity_id.in_([seeded_staff["staff_id"], seeded_staff["user_id"]]))
+        .all()
+    ):
+        cleanup_records.append(("audit_logs", entry.id))

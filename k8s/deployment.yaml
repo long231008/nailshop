@@ -13,6 +13,10 @@ spec:
       labels:
         app: nailshop-api
     spec:
+      # The image runs as a non-root system user; fsGroup makes the uploads
+      # volume group-writable for it (a fresh PVC mounts root-owned otherwise).
+      securityContext:
+        fsGroup: 2000
       containers:
         - name: nailshop-api
           image: nailshop-api:local
@@ -24,16 +28,37 @@ spec:
                 name: nailshop-config
             - secretRef:
                 name: nailshop-secrets
+          # Every probe must send the Host header the app answers to: kubelet
+          # dials the pod IP, and ALLOWED_HOSTS (nailshop-config) makes the app
+          # reject any other Host with 400, which would fail all three probes.
+          #
+          # The container runs "alembic upgrade head" before uvicorn; the
+          # startup probe gives migrations up to ~150s before liveness kicks in.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: api.nailzinc.co.uk
+            periodSeconds: 5
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
+              httpHeaders:
+                - name: Host
+                  value: api.nailzinc.co.uk
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
+              httpHeaders:
+                - name: Host
+                  value: api.nailzinc.co.uk
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:
@@ -43,3 +68,26 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+          volumeMounts:
+            # Design photos land here when Cloudinary is not configured; without
+            # a shared volume each replica keeps its own files and loses them on
+            # restart. RWO works on the single-node kind demo - a multi-node
+            # cluster needs RWX storage or (better) real Cloudinary credentials.
+            - name: uploads-data
+              mountPath: /code/uploads
+      volumes:
+        - name: uploads-data
+          persistentVolumeClaim:
+            claimName: uploads-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uploads-data
+  namespace: nailshop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

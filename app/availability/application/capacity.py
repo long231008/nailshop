@@ -4,9 +4,10 @@ Future days are sold against *lanes*, not against named technicians: nobody know
 yet which tech serves which booking (that is decided at the nightly close, doc 4).
 A lane is one overlapping customer within one 15-minute slot of one skill group.
 
-Lane cap per slot = floor(CAP_FILL x expected techs of that group) - counting
-lanes (not minutes) is what makes the nightly materialize structurally feasible:
-"overlapping legs <= techs" implies an interval colouring exists.
+Lane cap per slot = the expected techs of that group (full capacity - the shop
+is appointment-only, no walk-in lane is held back). Counting lanes (not minutes)
+is what makes the nightly materialize structurally feasible: "overlapping
+legs <= techs" implies an interval colouring exists.
 """
 
 from collections import Counter
@@ -118,8 +119,8 @@ def planning_minutes(db: Session, branch_id: UUID, service_id: UUID, day: date_t
 
 
 def expected_group_counts(db: Session, branch_id: UUID, day: date_type) -> dict[str, int]:
-    """Expected techs per skill group on `day`, from the staffing plan (pins +
-    Step A assignments + home/pool expectations - see roster.expected_staff)."""
+    """Expected techs per skill group on `day`, from the staffing plan (Step A
+    assignments + home/pool expectations - see roster.expected_staff)."""
     services = {s.id: s for s in db.query(ServiceModel).all()}
     matrix = load_matrix(db)
     counts: dict[str, int] = {}
@@ -131,12 +132,10 @@ def expected_group_counts(db: Session, branch_id: UUID, day: date_type) -> dict[
 
 
 def lanes_for(expected_techs: int) -> int:
-    """floor(CAP_FILL x T): the slack absorbs staffing surprises and keeps
-    walk-in lanes open (T>=2 always leaves at least one tech unsold). A
-    one-tech shop still sells its one lane - reserving it would sell nothing."""
-    if expected_techs <= 0:
-        return 0
-    return max(1, int(settings.CAP_FILL * expected_techs))
+    """Every expected tech is sellable: the shop is appointment-only, so no
+    lane is held back for walk-ins. Sick-day surprises are handled after the
+    fact by the repair flow (release + re-run), not by underselling."""
+    return max(0, expected_techs)
 
 
 def _slots_covered(start: datetime, end: datetime) -> list[datetime]:
@@ -236,10 +235,10 @@ class CapacityLedger:
 
 
 def rare_service_cap(eligible_count: int) -> int:
-    """Concurrent legs of one service <= its eligible techs, shaved by CAP_FILL
-    but never below 1 - one tech's speciality is sellable, just not twice at
-    the same instant (doc 1.1 rule 3)."""
-    return max(1, int(settings.CAP_FILL * eligible_count))
+    """Concurrent legs of one service <= its eligible techs - one tech's
+    speciality is sellable, just not twice at the same instant (doc 1.1
+    rule 3)."""
+    return max(1, eligible_count)
 
 
 def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tuple]:
@@ -264,7 +263,3 @@ def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tup
     ]
     windows.sort()
     return windows
-
-
-def is_window_free(busy: list[tuple], start: datetime, end: datetime) -> bool:
-    return all(b_end <= start or b_start >= end for b_start, b_end in busy)

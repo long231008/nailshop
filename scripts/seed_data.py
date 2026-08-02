@@ -2,9 +2,9 @@
 
 Run with: venv/Scripts/python.exe scripts/seed_data.py
 
-Static data (branches/services/staff/shifts) is safe to re-run -
+Static data (branches/services/staff) is safe to re-run -
 existing rows are reused instead of duplicated. Dynamic data (customers,
-bookings, payments, queue tickets, custom designs) is always added fresh
+bookings, payments, custom designs) is always added fresh
 so re-running gives you more sample activity to look at.
 """
 
@@ -28,7 +28,6 @@ from app.bookings.infrastructure.models import (
 from app.branches.infrastructure.models import LocationModel
 from app.custom_designs.infrastructure.models import CustomDesignModel
 from app.discounts.infrastructure.models import DiscountModel, DiscountType
-from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import SessionLocal
 from app.staff.infrastructure.models import StaffModel
@@ -350,15 +349,6 @@ def _seed_branch_activity(db, branch, services, staff_members, customers):
                     )
                 )
                 payment_count += 1
-
-    db.add(
-        QueueTicketModel(
-            ticket_number=f"W-SEED{uuid.uuid4().hex[:6].upper()}",
-            branch_id=branch.id,
-            ticket_type=QueueTicketType.WALKIN,
-            status=QueueTicketStatus.WAITING,
-        )
-    )
 
     return booking_count, payment_count
 

@@ -3,18 +3,21 @@
 Runs after the day's booking window has closed, so demand is complete and
 immutable. Start times were promised to customers and stay fixed; this is pure
 interval assignment. Each leg shrinks from its cautious planning duration to the
-assigned tech's real minutes - the slack becomes walk-in room the next morning.
+assigned tech's real minutes, so timelines reflect when techs actually finish.
 
 Fairness follows the salon turn system (doc 3.5): every assignment adds the
-service's turn weight to the tech's ledger, and the next any-tech leg goes to
-whoever holds the fewest turns.
+service's turn weight to the tech's ledger, and the next leg goes to whoever
+holds the fewest turns. A customer's preferred technician (preferred_staff_id)
+is deliberately NOT an input here - the allocator stays free to optimise; the
+wish is surfaced on /allocation/status for a manager to grant by hand via
+/allocation/reassign when the finished schedule allows it.
 """
 
 from datetime import date as date_type
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.allocation.application.roster import expected_staff
@@ -27,6 +30,7 @@ from app.bookings.infrastructure.models import BookingDetailModel, BookingModel,
 from app.capability.application.matrix import ceil_to_grid, load_matrix
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
+from app.slot_locks.application.locks import locks_overlapping
 
 
 def _day_details(db: Session, branch_id: UUID, target_date: date_type):
@@ -44,6 +48,31 @@ def _day_details(db: Session, branch_id: UUID, target_date: date_type):
         .order_by(BookingDetailModel.start_time)
         .all()
     )
+
+
+def _week_assigned_minutes(db: Session, staff_ids: list[UUID], day: date_type) -> dict[UUID, int]:
+    """Minutes already on each tech's plate for the ISO week of `day` - the
+    ledger behind the max_hours_week guard."""
+    if not staff_ids:
+        return {}
+    week_start = day - timedelta(days=day.weekday())
+    week_end = week_start + timedelta(days=7)
+    rows = (
+        db.query(
+            BookingDetailModel.staff_id,
+            func.coalesce(func.sum(BookingDetailModel.duration_min), 0),
+        )
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .filter(
+            BookingDetailModel.staff_id.in_(staff_ids),
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingModel.booking_date >= week_start,
+            BookingModel.booking_date < week_end,
+        )
+        .group_by(BookingDetailModel.staff_id)
+        .all()
+    )
+    return {staff_id: int(minutes) for staff_id, minutes in rows}
 
 
 def _customer_affinity(db: Session, customer_id: UUID, staff_ids: list[UUID]) -> set[UUID]:
@@ -73,14 +102,19 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         {"key": f"allocation:{branch_id}:{target_date.isoformat()}"},
     )
 
-    # The techs standing at this branch that day, per the roster (pins + Step A).
+    # The techs standing at this branch that day, per the roster (Step A).
     staff_list = expected_staff(db, branch_id, target_date)
     matrix = load_matrix(db)
     configured = matrix_configured_for(staff_list, matrix)
     rows = _day_details(db, branch_id, target_date)
 
-    # Personal timelines and the day's turn ledger start from what is already
-    # pinned (named-tech bookings joined the timeline at booking time, doc 3.3b).
+    # The owner's weekly ceiling per tech (fix #4, restored): assigning past it
+    # is refused here, exactly where assignment happens now.
+    week_minutes = _week_assigned_minutes(db, [s.id for s in staff_list], target_date)
+    week_limit = {s.id: s.max_hours_week * 60 for s in staff_list}
+
+    # Personal timelines and the day's turn ledger start from legs that already
+    # have a technician: an earlier run of this job, or a manual reassignment.
     timelines: dict[UUID, list] = {staff.id: [] for staff in staff_list}
     turns: dict[UUID, float] = {staff.id: 0.0 for staff in staff_list}
     last_finish: dict[UUID, object] = {}
@@ -92,6 +126,18 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             prev = last_finish.get(detail.staff_id)
             if prev is None or detail.end_time > prev:
                 last_finish[detail.staff_id] = detail.end_time
+
+    # Manual slot locks close parts of the day: a staff lock blocks that tech,
+    # a branch-wide lock blocks everyone. Without this, the allocator could
+    # seat a customer inside a range the salon explicitly closed.
+    lock_day_start, lock_day_end = day_bounds_utc(target_date)
+    for lock in locks_overlapping(db, branch_id, lock_day_start, lock_day_end):
+        if lock.staff_id is not None:
+            if lock.staff_id in timelines:
+                timelines[lock.staff_id].append((lock.start_time, lock.end_time))
+        else:
+            for windows in timelines.values():
+                windows.append((lock.start_time, lock.end_time))
 
     for windows in timelines.values():
         windows.sort()
@@ -105,9 +151,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             continue
 
         booking_staff = {
-            d.staff_id
-            for d, b, _s in rows
-            if b.id == booking.id and d.staff_id is not None
+            d.staff_id for d, b, _s in rows if b.id == booking.id and d.staff_id is not None
         }
         candidates = []
         for staff in staff_list:
@@ -116,7 +160,10 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
                 if configured:
                     continue
                 minutes = service.duration_min  # matrix not filled in yet
-            real_end = detail.start_time + timedelta(minutes=ceil_to_grid(minutes))
+            real = ceil_to_grid(minutes)
+            if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
+                continue  # no hours left that week
+            real_end = detail.start_time + timedelta(minutes=real)
             hold_end = real_end + timedelta(minutes=service.buffer_after_min)
             if not all(
                 b_end <= detail.start_time or b_start >= hold_end
@@ -143,12 +190,13 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         )
 
         detail.staff_id = staff.id
-        # Shrink to the assigned tech's real minutes (v3.2): the difference
-        # between the cautious hold and reality becomes walk-in room.
+        # Shrink to the assigned tech's real minutes (v3.2) so the timeline
+        # shows when the tech is really free again.
         detail.end_time = real_end
         detail.duration_min = int((real_end - detail.start_time).total_seconds() // 60)
         timelines[staff.id].append((detail.start_time, hold_end))
         timelines[staff.id].sort()
+        week_minutes[staff.id] = week_minutes.get(staff.id, 0) + detail.duration_min
         turns[staff.id] += float(service.turn_weight)
         prev = last_finish.get(staff.id)
         if prev is None or real_end > prev:
@@ -170,9 +218,9 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
 def release_staff_assignments(
     db: Session, staff_id: UUID, branch_id: UUID, target_date: date_type
 ) -> int:
-    """A tech calls in sick after the close (edge case 10): free only their
-    any-tech legs so a re-run can hand them to someone else. Legs the customer
-    booked by name are left for a human to phone about - never auto-swapped."""
+    """A tech calls in sick after the close (edge case 10): free all their legs
+    so a re-run can hand them to someone else. Named techs are preferences,
+    not promises, so nothing needs a phone call first."""
     day_start, day_end = day_bounds_utc(target_date)
     details = (
         db.query(BookingDetailModel)
@@ -181,7 +229,6 @@ def release_staff_assignments(
             BookingModel.branch_id == branch_id,
             BookingModel.status.in_([BookingStatus.PENDING, BookingStatus.APPROVED]),
             BookingDetailModel.staff_id == staff_id,
-            BookingDetailModel.staff_requested.is_(False),
             BookingDetailModel.start_time >= day_start,
             BookingDetailModel.start_time < day_end,
         )

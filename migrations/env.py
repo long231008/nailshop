@@ -71,6 +71,16 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        # Every replica runs "alembic upgrade head" at container start; this
+        # session-level advisory lock makes concurrent upgrades take turns
+        # instead of racing the same DDL. The lock survives the commit (it is
+        # released when the connection closes) - the commit only ends the
+        # implicit transaction the SELECT opened, so Alembic still manages its
+        # own transaction below. The loser of the race simply finds the schema
+        # already at head and does nothing.
+        connection.exec_driver_sql("SELECT pg_advisory_lock(hashtext('alembic_upgrade'))")
+        connection.commit()
+
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():

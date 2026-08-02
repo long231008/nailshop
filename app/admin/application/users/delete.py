@@ -15,7 +15,6 @@ from app.auth.domain.value_object import UserStatus
 from app.auth.infrastructure.models import UserModel
 from app.bookings.infrastructure.models import BookingModel
 from app.custom_designs.infrastructure.models import CustomDesignModel
-from app.queue.infrastructure.models import QueueTicketModel
 from app.slot_locks.infrastructure.models import SlotLockModel
 from app.staff.infrastructure.models import StaffModel
 
@@ -28,7 +27,6 @@ def _has_history(db: Session, user_id: UUID, staff: StaffModel | None) -> bool:
     checks = [
         db.query(BookingModel.id).filter(BookingModel.customer_id == user_id),
         db.query(CustomDesignModel.id).filter(CustomDesignModel.customer_id == user_id),
-        db.query(QueueTicketModel.id).filter(QueueTicketModel.customer_id == user_id),
         db.query(AuditLogModel.id).filter(AuditLogModel.actor_user_id == user_id),
         db.query(SlotLockModel.id).filter(SlotLockModel.created_by == user_id),
     ]
@@ -56,6 +54,8 @@ def delete_or_anonymize_user(db: Session, user_id: UUID, actor_user_id: UUID) ->
     if _has_history(db, user_id, staff):
         user.phone_number = None
         user.email = None
+        user.first_name = None
+        user.surname = None
         user.status = UserStatus.BLOCKED
         if staff is not None:
             from app.staff.infrastructure.models import StaffStatus

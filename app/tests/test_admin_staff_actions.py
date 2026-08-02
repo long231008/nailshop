@@ -32,6 +32,14 @@ def test_block_staff_deletes_future_shifts_and_unassigns_future_bookings(
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
 
+    # Preferences are only wishes: the tech gets the leg at the nightly run.
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+
     response = client.post(
         f"/app/admin/staff/{seeded_staff['staff_id']}/block", headers=admin_headers
     )

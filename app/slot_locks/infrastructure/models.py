@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,11 +11,12 @@ from app.shared.infrastructure.database.base import Base
 class SlotLockModel(Base):
     """A time range closed for new bookings.
 
-    staff_id NULL locks the whole branch (e.g. the slot is full of walk-ins);
+    staff_id NULL locks the whole branch (e.g. a staff meeting or deep clean);
     otherwise only that staff member is blocked.
     """
 
     __tablename__ = "slot_locks"
+    __table_args__ = (Index("ix_slot_locks_branch_time", "branch_id", "start_time", "end_time"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4

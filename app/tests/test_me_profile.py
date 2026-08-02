@@ -36,3 +36,17 @@ def test_patch_my_profile_ignores_email(client, customer_identity, unique_email)
 
     assert response.status_code == 200
     assert response.json()["email"] is None
+
+
+def test_profile_exposes_staff_identity(client, seeded_staff):
+    response = client.get("/app/me", headers=seeded_staff["headers"])
+    assert response.status_code == 200
+    body = response.json()
+    assert body["staff_id"] == str(seeded_staff["staff_id"])
+    assert body["staff_display_name"] == "Test Staff"
+
+
+def test_profile_has_no_staff_identity_for_customers(client, customer_headers):
+    response = client.get("/app/me", headers=customer_headers)
+    assert response.status_code == 200
+    assert response.json()["staff_id"] is None

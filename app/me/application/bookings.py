@@ -10,11 +10,15 @@ from app.webhooks.infrastructure.models import (
 )
 
 
-def list_my_bookings(db: Session, customer_id: UUID) -> list[BookingModel]:
+def list_my_bookings(
+    db: Session, customer_id: UUID, limit: int = 50, offset: int = 0
+) -> list[BookingModel]:
     return (
         db.query(BookingModel)
         .filter(BookingModel.customer_id == customer_id)
         .order_by(BookingModel.created_at.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
     )
 

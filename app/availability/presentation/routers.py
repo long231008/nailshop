@@ -24,7 +24,13 @@ def get_availability(
         default=None,
         description="Comma-separated service ids of the whole visit, in order",
     ),
-    staff_id: UUID | None = None,
+    staff_id: UUID | None = Query(
+        default=None,
+        description=(
+            "Accepted for compatibility but ignored: a preferred technician "
+            "does not change which times are sellable"
+        ),
+    ),
     db: Session = Depends(get_db),
 ) -> AvailabilityResponse:
     ids: list[UUID] = []
@@ -45,7 +51,7 @@ def get_availability(
         )
 
     try:
-        slots = find_available_slots(db, branch_id, ids, date, staff_id)
+        slots = find_available_slots(db, branch_id, ids, date)
     except ServiceNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
     except BookingWindowClosedError as exc:

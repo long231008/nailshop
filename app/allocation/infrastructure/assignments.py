@@ -3,7 +3,7 @@ from datetime import date as date_
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, Index, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -12,10 +12,8 @@ from app.shared.infrastructure.database.base import Base
 
 
 class AssignmentSource(str, Enum):
-    # A customer booked this technician by name: the exclusive pin registry
-    # (doc 3.3b) - first booking wins, one tech works at most one salon a day.
-    PIN = "pin"
-    # Step A of the nightly allocation placed the technician here.
+    # Step A of the nightly allocation placed the technician here. This is the
+    # only writer today - customer wishes never claim a technician or a branch.
     AUTO = "auto"
 
 
@@ -27,7 +25,10 @@ class StaffDayAssignmentModel(Base):
     """
 
     __tablename__ = "staff_day_assignments"
-    __table_args__ = (UniqueConstraint("staff_id", "day", name="uq_staff_day"),)
+    __table_args__ = (
+        UniqueConstraint("staff_id", "day", name="uq_staff_day"),
+        Index("ix_staff_day_assignments_branch_day", "branch_id", "day"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4

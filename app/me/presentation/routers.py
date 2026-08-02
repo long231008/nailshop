@@ -1,15 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from redis import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth.domain.value_object import UserRole
 from app.auth.infrastructure.models import UserModel
 from app.auth.infrastructure.otp_repository_impl import RedisOtpRepository
 from app.me.application.bookings import bookings_awaiting_deposit, list_my_bookings
 from app.me.application.custom_designs import list_my_custom_designs
 from app.me.application.email_change import (
     EmailAlreadyUsedError,
+    EmailChangeTooManyAttemptsError,
     InvalidEmailCodeError,
     NoPendingEmailChangeError,
     confirm_email_change,
@@ -30,9 +32,17 @@ from app.shared.infrastructure.cache.redis_client import get_redis
 from app.shared.infrastructure.config.settings import settings
 from app.shared.infrastructure.database.session import get_db
 from app.shared.infrastructure.rate_limit import limiter
-from app.shared.presentation.dependencies import CurrentUser, get_current_user, require_roles
+from app.shared.presentation.dependencies import CurrentUser, get_current_user
+from app.staff.infrastructure.models import StaffModel
 
 router = APIRouter(prefix="/me", tags=["me"])
+
+
+def _staff_identity(db: Session, user_id) -> tuple[UUID | None, str | None]:
+    staff = db.query(StaffModel).filter(StaffModel.user_id == user_id).first()
+    if staff is None:
+        return None, None
+    return staff.id, staff.display_name
 
 
 @router.get("", response_model=MyProfileResponse)
@@ -44,6 +54,7 @@ def get_my_profile(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    staff_id, staff_display_name = _staff_identity(db, user.id)
     return MyProfileResponse(
         id=user.id,
         phone_number=user.phone_number,
@@ -53,6 +64,8 @@ def get_my_profile(
         role=user.role.value,
         status=user.status.value,
         created_at=user.created_at,
+        staff_id=staff_id,
+        staff_display_name=staff_display_name,
     )
 
 
@@ -81,6 +94,7 @@ def update_my_profile(
         )
     db.refresh(user)
 
+    staff_id, staff_display_name = _staff_identity(db, user.id)
     return MyProfileResponse(
         id=user.id,
         phone_number=user.phone_number,
@@ -90,6 +104,8 @@ def update_my_profile(
         role=user.role.value,
         status=user.status.value,
         created_at=user.created_at,
+        staff_id=staff_id,
+        staff_display_name=staff_display_name,
     )
 
 
@@ -143,6 +159,11 @@ def confirm_email_change_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid confirmation code"
         )
+    except EmailChangeTooManyAttemptsError:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many incorrect codes - please start the email change again",
+        )
     except EmailAlreadyUsedError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -163,10 +184,12 @@ def confirm_email_change_endpoint(
 
 @router.get("/bookings", response_model=list[MyBookingSummary])
 def get_my_bookings(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> list[MyBookingSummary]:
-    bookings = list_my_bookings(db, current_user.id)
+    bookings = list_my_bookings(db, current_user.id, limit=limit, offset=offset)
     awaiting_deposit = bookings_awaiting_deposit(db, bookings)
     return [
         MyBookingSummary(
@@ -189,7 +212,7 @@ def get_my_bookings(
 @router.get("/custom-designs", response_model=list[MyCustomDesignSummary])
 def get_my_custom_designs(
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> list[MyCustomDesignSummary]:
     designs = list_my_custom_designs(db, current_user.id)
     return [

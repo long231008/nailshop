@@ -31,6 +31,13 @@ class InvalidEmailCodeError(Exception):
     pass
 
 
+class EmailChangeTooManyAttemptsError(Exception):
+    """Five wrong codes burn the pending change - same rule as login OTPs."""
+
+
+MAX_EMAIL_CHANGE_ATTEMPTS = 5
+
+
 def request_email_change(
     db: Session,
     otp_repository: OtpRepository,
@@ -57,6 +64,10 @@ def confirm_email_change(
 
     email, expected_code = pending
     if not hmac.compare_digest(expected_code, code):
+        attempts = otp_repository.register_email_change_attempt(user_id, EMAIL_CHANGE_TTL_SECONDS)
+        if attempts >= MAX_EMAIL_CHANGE_ATTEMPTS:
+            otp_repository.delete_email_change(user_id)
+            raise EmailChangeTooManyAttemptsError()
         raise InvalidEmailCodeError()
 
     # Re-check at the last moment: someone else may have claimed it meanwhile.

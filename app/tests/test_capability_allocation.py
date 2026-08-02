@@ -88,9 +88,7 @@ def test_matrix_roundtrip_and_real_minutes_scheduling(
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"]])
 
 
-def test_matrix_rejects_a_typo_beyond_3x_menu(
-    client, admin_headers, seeded_service, seeded_staff
-):
+def test_matrix_rejects_a_typo_beyond_3x_menu(client, admin_headers, seeded_service, seeded_staff):
     save = client.put(
         "/app/capability/matrix",
         json={
@@ -223,118 +221,15 @@ def test_capacity_blocks_overselling_one_tech_branch(
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"]])
 
 
-# --- Chain staff: exclusive pins + Step A ------------------------------------
+# --- Chain staff: Step A placement ------------------------------------
 
 
-@pytest.fixture
-def second_branch(db_session, cleanup_records):
-    from app.branches.infrastructure.models import LocationModel
-
-    branch = LocationModel(name=f"Branch2-{uuid.uuid4().hex[:6]}", address="2 Test St")
-    db_session.add(branch)
-    db_session.commit()
-    cleanup_records.append(("locations", branch.id))
-    return branch.id
-
-
-def _named_payload(branch_id, service_id, staff_id, start):
-    return {
-        "branch_id": str(branch_id),
-        "items": [
-            {
-                "service_id": str(service_id),
-                "staff_id": str(staff_id),
-                "start_time": start.isoformat(),
-            }
-        ],
-    }
-
-
-def test_pin_is_exclusive_first_booking_wins(
-    client,
-    customer_headers,
-    other_customer_headers,
-    seeded_branch,
-    second_branch,
-    seeded_service,
-    seeded_staff,
-    seeded_shift,
-    cleanup_records,
-):
-    """A named booking pins the tech to that salon for the day; a second salon
-    asking for the same tech the same day is refused (doc 3.3b)."""
-    first = client.post(
-        "/app/bookings",
-        json=_named_payload(
-            seeded_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
-        ),
-        headers=customer_headers,
-    )
-    assert first.status_code == 201, first.text
-    cleanup_records.append(("bookings", first.json()["id"]))
-    cleanup_records.append(("booking_details", first.json()["details"][0]["id"]))
-
-    second = client.post(
-        "/app/bookings",
-        json=_named_payload(
-            second_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
-        ),
-        headers=other_customer_headers,
-    )
-    assert second.status_code == 400
-    assert "another salon" in second.json()["detail"]
-
-
-def test_cancelling_last_named_booking_releases_the_pin(
-    client,
-    customer_headers,
-    other_customer_headers,
-    seeded_branch,
-    second_branch,
-    seeded_service,
-    seeded_staff,
-    seeded_shift,
-    cleanup_records,
-):
-    first = client.post(
-        "/app/bookings",
-        json=_named_payload(
-            seeded_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
-        ),
-        headers=customer_headers,
-    )
-    assert first.status_code == 201, first.text
-    booking = first.json()
-    cleanup_records.append(("bookings", booking["id"]))
-    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
-
-    cancel = client.post(f"/app/bookings/{booking['id']}/cancel", headers=customer_headers)
-    assert cancel.status_code == 200
-
-    # The pin is gone: the other salon can now claim the tech for that day.
-    second = client.post(
-        "/app/bookings",
-        json=_named_payload(
-            second_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
-        ),
-        headers=other_customer_headers,
-    )
-    assert second.status_code == 201, second.text
-    cleanup_records.append(("bookings", second.json()["id"]))
-    cleanup_records.append(("booking_details", second.json()["details"][0]["id"]))
-
-
-def test_step_a_places_every_available_tech_and_respects_pins(
-    client,
-    customer_headers,
+def test_step_a_places_every_available_tech(
     db_session,
     seeded_branch,
-    second_branch,
-    seeded_service,
     seeded_staff,
     second_staff,
     seeded_shift,
-    cleanup_records,
 ):
     from sqlalchemy import text
 
@@ -346,18 +241,6 @@ def test_step_a_places_every_available_tech_and_respects_pins(
 
     day = seeded_shift["start"].date()
 
-    # A named booking at the SECOND branch pins the seeded tech there.
-    booking = client.post(
-        "/app/bookings",
-        json=_named_payload(
-            second_branch, seeded_service, seeded_staff["staff_id"], seeded_shift["start"]
-        ),
-        headers=customer_headers,
-    )
-    assert booking.status_code == 201, booking.text
-    cleanup_records.append(("bookings", booking.json()["id"]))
-    cleanup_records.append(("booking_details", booking.json()["details"][0]["id"]))
-
     try:
         solve_day(db_session, day)
 
@@ -367,15 +250,228 @@ def test_step_a_places_every_available_tech_and_respects_pins(
             .filter(StaffDayAssignmentModel.day == day)
             .all()
         }
-        pinned = rows[seeded_staff["staff_id"]]
-        assert pinned.branch_id == second_branch
-        assert pinned.source == AssignmentSource.PIN
-        # The second tech got a branch too (auto), so every floor is covered.
+        # Both techs got a branch for the day, placed by the solver.
+        assert rows[seeded_staff["staff_id"]].source == AssignmentSource.AUTO
         assert rows[second_staff.id].source == AssignmentSource.AUTO
     finally:
         # solve_day touches every active tech in the dev database - remove the
         # whole day's assignments so no side effects outlive the test.
-        db_session.execute(
-            text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day}
-        )
+        db_session.execute(text("DELETE FROM staff_day_assignments WHERE day = :day"), {"day": day})
         db_session.commit()
+
+
+def test_preference_is_ignored_by_allocator_and_granted_by_hand(
+    client,
+    admin_headers,
+    customer_headers,
+    other_customer_headers,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    second_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """The allocator optimises freely (fairness wins, the wish is ignored);
+    the wish shows up on /allocation/status and a manager grants it by hand
+    via /allocation/reassign."""
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    first = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    )
+    assert first.status_code == 201, first.text
+    cleanup_records.append(("bookings", first.json()["id"]))
+    cleanup_records.append(("booking_details", first.json()["details"][0]["id"]))
+
+    second = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": (seeded_shift["start"].replace(hour=13)).isoformat(),
+                }
+            ],
+        },
+        headers=other_customer_headers,
+    )
+    assert second.status_code == 201, second.text
+    cleanup_records.append(("bookings", second.json()["id"]))
+    detail_id = second.json()["details"][0]["id"]
+    cleanup_records.append(("booking_details", detail_id))
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+    assert run.unassigned_count == 0
+
+    # Fairness wins: the wished (busier) tech does NOT get the leg.
+    detail = db_session.get(BookingDetailModel, uuid.UUID(detail_id))
+    db_session.refresh(detail)
+    assert detail.staff_id == second_staff.id
+
+    # The wish is surfaced for a human next to the machine's decision.
+    status_body = client.get(
+        "/app/allocation/status",
+        params={"target_date": day.isoformat(), "branch_id": str(seeded_branch)},
+        headers=admin_headers,
+    ).json()
+    entry = next(p for p in status_body["preferences"] if p["booking_detail_id"] == detail_id)
+    assert entry["preferred_staff_id"] == str(seeded_staff["staff_id"])
+    assert entry["assigned_staff_id"] == str(second_staff.id)
+    assert entry["honoured"] is False
+
+    # The manager grants the wish by hand; the leg moves and is audited.
+    reassign = client.post(
+        "/app/allocation/reassign",
+        json={"booking_detail_id": detail_id, "staff_id": str(seeded_staff["staff_id"])},
+        headers=admin_headers,
+    )
+    assert reassign.status_code == 200, reassign.text
+    db_session.refresh(detail)
+    assert detail.staff_id == seeded_staff["staff_id"]
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+
+    log_entry = (
+        db_session.query(AuditLogModel)
+        .filter(
+            AuditLogModel.action == "allocation.reassigned",
+            AuditLogModel.entity_id == uuid.UUID(second.json()["id"]),
+        )
+        .first()
+    )
+    cleanup_records.append(("audit_logs", log_entry.id))
+    assert log_entry.details["to_staff_id"] == str(seeded_staff["staff_id"])
+
+    # The tool is general, not wish-only: the manager can also move the other
+    # leg onto the now-idle tech to rebalance the day.
+    rebalance = client.post(
+        "/app/allocation/reassign",
+        json={
+            "booking_detail_id": first.json()["details"][0]["id"],
+            "staff_id": str(second_staff.id),
+        },
+        headers=admin_headers,
+    )
+    assert rebalance.status_code == 200, rebalance.text
+
+
+def test_matrix_save_replaces_only_staff_in_payload(
+    client,
+    admin_headers,
+    db_session,
+    seeded_service,
+    seeded_staff,
+    second_staff,
+):
+    """A partial payload edits only the technicians it names; everyone else's
+    cells survive. An empty mapping clears a technician's whole row."""
+    first_id = str(seeded_staff["staff_id"])
+    second_id = str(second_staff.id)
+    service_id = str(seeded_service)
+
+    save = client.put(
+        "/app/capability/matrix",
+        json={
+            "services": [],
+            "staff": [],
+            "capability": {first_id: {service_id: 45}, second_id: {service_id: 60}},
+        },
+        headers=admin_headers,
+    )
+    assert save.status_code == 200, save.text
+
+    partial = client.put(
+        "/app/capability/matrix",
+        json={"services": [], "staff": [], "capability": {first_id: {service_id: 30}}},
+        headers=admin_headers,
+    )
+    assert partial.status_code == 200, partial.text
+
+    matrix = client.get("/app/capability/matrix", headers=admin_headers).json()["capability"]
+    assert matrix[first_id][service_id] == 30
+    # The second tech was absent from the payload - their row must survive.
+    assert matrix[second_id][service_id] == 60
+
+    cleared = client.put(
+        "/app/capability/matrix",
+        json={"services": [], "staff": [], "capability": {second_id: {}}},
+        headers=admin_headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    matrix = client.get("/app/capability/matrix", headers=admin_headers).json()["capability"]
+    assert not matrix.get(second_id)
+    assert matrix[first_id][service_id] == 30
+
+    _cleanup_capabilities(db_session, [seeded_staff["staff_id"], second_staff.id])
+
+
+def test_weekly_hours_ceiling_blocks_assignment_and_reassign(
+    client,
+    admin_headers,
+    customer_headers,
+    db_session,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """A tech with no hours left that week is skipped by the allocator and
+    refused by manual reassignment (fix #4, restored)."""
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+    from app.staff.infrastructure.models import StaffModel
+
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    detail_id = booking["details"][0]["id"]
+    cleanup_records.append(("booking_details", detail_id))
+
+    staff = db_session.get(StaffModel, seeded_staff["staff_id"])
+    staff.max_hours_week = 0
+    db_session.commit()
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+    assert run.unassigned_count == 1
+
+    reassign = client.post(
+        "/app/allocation/reassign",
+        json={"booking_detail_id": detail_id, "staff_id": str(seeded_staff["staff_id"])},
+        headers=admin_headers,
+    )
+    assert reassign.status_code == 400
+    assert "no hours left" in reassign.json()["detail"]
+
+    staff.max_hours_week = 40
+    db_session.commit()

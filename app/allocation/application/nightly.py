@@ -23,12 +23,10 @@ def run_nightly_allocation(db: Session) -> list[AllocationRunModel]:
         logger.info("Nightly allocation: %s is a closed day, nothing to assign", target_date)
         return []
 
-    # Step A: place every technician at a branch for tomorrow (pins fixed,
-    # demand-driven greedy for the rest - doc 4.2/4.4).
+    # Step A: place every technician at a branch for tomorrow
+    # (demand-driven greedy - doc 4.2/4.4).
     assignments = solve_day(db, target_date)
-    logger.info(
-        "Step A placed %d technicians for %s", len(assignments), target_date
-    )
+    logger.info("Step A placed %d technicians for %s", len(assignments), target_date)
 
     runs = []
     for branch in db.query(LocationModel).all():
@@ -44,8 +42,7 @@ def run_nightly_allocation(db: Session) -> list[AllocationRunModel]:
             # The three-tier repair ladder (doc 4.3) is a human decision here:
             # surface it loudly for the manager instead of silently juggling.
             logger.warning(
-                "Allocation left %d unassigned legs at branch %s on %s - "
-                "manager attention needed",
+                "Allocation left %d unassigned legs at branch %s on %s - manager attention needed",
                 run.unassigned_count,
                 branch.id,
                 target_date,

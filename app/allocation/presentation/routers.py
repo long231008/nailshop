@@ -2,20 +2,27 @@ from datetime import date as date_type
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.allocation.application.materialize import materialize_day, release_staff_assignments
+from app.allocation.application.reassign import (
+    LegNotFoundError,
+    ReassignConflictError,
+    ReassignNotAllowedError,
+    reassign_leg,
+)
 from app.allocation.application.roster import solve_day
-from app.allocation.application.walkin import WalkInServiceNotFoundError, find_walkin_options
 from app.allocation.infrastructure.assignments import StaffDayAssignmentModel
 from app.allocation.infrastructure.models import AllocationRunModel
 from app.allocation.presentation.schemas import (
     AllocationRunRequest,
     AllocationRunResponse,
     AllocationStatusResponse,
+    PreferenceEntry,
+    ReassignRequest,
+    ReassignResponse,
     RosterEntry,
     UnassignedLeg,
-    WalkInOption,
 )
 from app.auth.domain.value_object import UserRole
 from app.availability.application.capacity import ACTIVE_BOOKING_STATUSES
@@ -54,15 +61,13 @@ def run_allocation(
     else:
         branch_ids = [branch.id for branch in db.query(LocationModel).all()]
 
-    # Step A first: every tech gets a branch for the day (pins untouched).
+    # Step A first: every tech gets a branch for the day.
     solve_day(db, payload.target_date)
 
     runs = []
     for branch_id in branch_ids:
         if payload.release_staff_id is not None:
-            release_staff_assignments(
-                db, payload.release_staff_id, branch_id, payload.target_date
-            )
+            release_staff_assignments(db, payload.release_staff_id, branch_id, payload.target_date)
         runs.append(materialize_day(db, branch_id, payload.target_date))
     return [_run_response(run) for run in runs]
 
@@ -74,9 +79,7 @@ def allocation_status(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> AllocationStatusResponse:
-    runs_query = db.query(AllocationRunModel).filter(
-        AllocationRunModel.target_date == target_date
-    )
+    runs_query = db.query(AllocationRunModel).filter(AllocationRunModel.target_date == target_date)
     if branch_id is not None:
         runs_query = runs_query.filter(AllocationRunModel.branch_id == branch_id)
     runs = runs_query.order_by(AllocationRunModel.created_at.desc()).all()
@@ -124,24 +127,87 @@ def allocation_status(
             start_time=detail.start_time,
             end_time=detail.end_time,
         )
-        for detail, service_name in unassigned_query.order_by(
+        for detail, service_name in unassigned_query.order_by(BookingDetailModel.start_time).all()
+    ]
+    # Customer wishes next to the machine's decisions: the allocator ignores
+    # preferences on purpose - a manager grants them here, by hand.
+    assigned_staff = aliased(StaffModel)
+    preferred_staff = aliased(StaffModel)
+    preference_query = (
+        db.query(
+            BookingDetailModel,
+            ServiceModel.name,
+            preferred_staff.display_name,
+            assigned_staff.display_name,
+        )
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+        .join(preferred_staff, BookingDetailModel.preferred_staff_id == preferred_staff.id)
+        .outerjoin(assigned_staff, BookingDetailModel.staff_id == assigned_staff.id)
+        .filter(
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingDetailModel.preferred_staff_id.isnot(None),
+            BookingDetailModel.start_time >= day_start,
+            BookingDetailModel.start_time < day_end,
+        )
+    )
+    if branch_id is not None:
+        preference_query = preference_query.filter(BookingModel.branch_id == branch_id)
+
+    preferences = [
+        PreferenceEntry(
+            booking_id=detail.booking_id,
+            booking_detail_id=detail.id,
+            service_name=service_name,
+            start_time=detail.start_time,
+            end_time=detail.end_time,
+            preferred_staff_id=detail.preferred_staff_id,
+            preferred_staff_name=preferred_name,
+            assigned_staff_id=detail.staff_id,
+            assigned_staff_name=assigned_name,
+            honoured=detail.staff_id == detail.preferred_staff_id,
+        )
+        for detail, service_name, preferred_name, assigned_name in preference_query.order_by(
             BookingDetailModel.start_time
         ).all()
     ]
+
     return AllocationStatusResponse(
-        runs=[_run_response(run) for run in runs], roster=roster, unassigned=unassigned
+        runs=[_run_response(run) for run in runs],
+        roster=roster,
+        unassigned=unassigned,
+        preferences=preferences,
     )
 
 
-@router.get("/walkin-options", response_model=list[WalkInOption])
-def walkin_options(
-    branch_id: UUID,
-    service_id: UUID,
+@router.post("/reassign", response_model=ReassignResponse)
+def reassign(
+    payload: ReassignRequest,
     db: Session = Depends(get_db),
-    _=Depends(require_roles(UserRole.ADMIN, UserRole.STAFF)),
-) -> list[WalkInOption]:
+    current_user=Depends(require_roles(UserRole.ADMIN)),
+) -> ReassignResponse:
+    """Move one leg onto a chosen technician - the manager's tool for granting
+    a customer's wish once the allocator has finished."""
     try:
-        options = find_walkin_options(db, branch_id, service_id)
-    except WalkInServiceNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
-    return [WalkInOption(**option) for option in options]
+        detail, staff = reassign_leg(
+            db, payload.booking_detail_id, payload.staff_id, current_user.id
+        )
+    except LegNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Booking detail not found"
+        )
+    except ReassignNotAllowedError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except ReassignConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That technician is not free at this time",
+        )
+    return ReassignResponse(
+        booking_detail_id=detail.id,
+        booking_id=detail.booking_id,
+        staff_id=staff.id,
+        staff_name=staff.display_name,
+        start_time=detail.start_time,
+        end_time=detail.end_time,
+    )

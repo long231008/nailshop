@@ -79,8 +79,7 @@ def get_matrix_payload(db: Session) -> dict:
         "staff": staff_list,
         "capability": {
             str(staff.id): {
-                str(service_id): minutes
-                for service_id, minutes in matrix.get(staff.id, {}).items()
+                str(service_id): minutes for service_id, minutes in matrix.get(staff.id, {}).items()
             }
             for staff in staff_list
         },
@@ -102,10 +101,14 @@ def _validate_cell(minutes: int, service: ServiceModel) -> None:
 def save_matrix(
     db: Session, capability: dict[UUID, dict[UUID, int]]
 ) -> tuple[list[str], list[dict]]:
-    """Replace the capability matrix with the owner's new numbers.
+    """Replace capability rows with the owner's new numbers, one technician at a
+    time: each staff key in the payload replaces that technician's whole row;
+    technicians absent from the payload keep their existing cells. To clear a
+    technician entirely, send them with an empty mapping. (A partial payload
+    must never wipe the rest of the chain's matrix.)
 
     Returns (warnings, affected_bookings). Removing a (tech, service) cell that a
-    future pinned booking relies on does not silently fix anything - the affected
+    future assigned booking relies on does not silently fix anything - the affected
     bookings are reported so reception can call the customers (doc 1.1 rule 4).
     """
     services = {service.id: service for service in db.query(ServiceModel).all()}
@@ -122,26 +125,33 @@ def save_matrix(
 
     old_matrix = load_matrix(db)
 
-    db.query(StaffCapabilityModel).delete()
+    if capability:
+        db.query(StaffCapabilityModel).filter(
+            StaffCapabilityModel.staff_id.in_(capability.keys())
+        ).delete(synchronize_session=False)
     for staff_id, cells in capability.items():
         for service_id, minutes in cells.items():
-            db.add(
-                StaffCapabilityModel(staff_id=staff_id, service_id=service_id, minutes=minutes)
-            )
+            db.add(StaffCapabilityModel(staff_id=staff_id, service_id=service_id, minutes=minutes))
 
     warnings = []
-    covered = {sid for cells in capability.values() for sid in cells}
+    # Coverage is judged on the merged result: payload rows plus the untouched
+    # rows of technicians absent from the payload.
+    merged = {sid: cells for sid, cells in old_matrix.items() if sid not in capability}
+    merged.update(capability)
+    covered = {sid for cells in merged.values() for sid in cells}
     for service in services.values():
         if service.id not in covered:
             warnings.append(f"No technician can do '{service.name}' - it cannot be sold")
 
-    # on_capability_change: future bookings pinned to a (tech, service) pair whose
+    # on_capability_change: future bookings assigned to a (tech, service) pair whose
     # cell was just removed need a human decision, never a silent reassignment.
+    # Only technicians present in the payload can lose cells.
     removed_pairs = {
         (staff_id, service_id)
         for staff_id, cells in old_matrix.items()
+        if staff_id in capability
         for service_id in cells
-        if capability.get(staff_id, {}).get(service_id) is None
+        if capability[staff_id].get(service_id) is None
     }
     affected = []
     if removed_pairs:

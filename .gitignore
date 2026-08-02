@@ -7,6 +7,7 @@ __pycache__/
 # ===== Môi trường ảo =====
 venv/
 .venv/
+.venv-linux/
 env/
 
 # ===== Biến môi trường =====

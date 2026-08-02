@@ -13,7 +13,6 @@ from app.dashboard.domain.entities import (
     RevenueSummary,
 )
 from app.dashboard.domain.repository import DashboardRepository
-from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
 from app.shared.infrastructure.clock import (
     start_of_day_utc,
     start_of_month_utc,
@@ -41,14 +40,6 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
         for booking in booking_query.all():
             counts[booking.status] += 1
 
-        queue_query = self._db.query(QueueTicketModel).filter(
-            QueueTicketModel.ticket_type == QueueTicketType.WALKIN,
-            QueueTicketModel.status == QueueTicketStatus.WAITING,
-        )
-        if branch_id is not None:
-            queue_query = queue_query.filter(QueueTicketModel.branch_id == branch_id)
-        queue_waiting_count = queue_query.count()
-
         # Custom designs are not tied to a branch, so this figure is global. When a
         # branch filter is active it is still shown - a request waiting to be priced
         # concerns every branch.
@@ -60,13 +51,11 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
 
         if branch_id is None:
             active_staff_count = (
-                self._db.query(StaffModel)
-                .filter(StaffModel.status == StaffStatus.ACTIVE)
-                .count()
+                self._db.query(StaffModel).filter(StaffModel.status == StaffStatus.ACTIVE).count()
             )
         else:
             # Techs belong to the chain: today's headcount at a branch follows
-            # the day roster (pins + Step A), falling back to home preference.
+            # the day roster (Step A), falling back to home preference.
             from app.allocation.application.roster import expected_staff
 
             active_staff_count = len(expected_staff(self._db, branch_id, today))
@@ -81,7 +70,6 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
                 cancelled=counts[BookingStatus.CANCELLED],
                 no_show=counts[BookingStatus.NO_SHOW],
             ),
-            queue_waiting_count=queue_waiting_count,
             pending_custom_designs=pending_custom_designs,
             active_staff_count=active_staff_count,
         )
@@ -94,6 +82,7 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
 
         deposit_types = [PaymentTransactionType.DEPOSIT]
         total_types = [PaymentTransactionType.DEPOSIT, PaymentTransactionType.FINAL_PAYMENT]
+        refund_types = [PaymentTransactionType.REFUND]
 
         def sum_since(transaction_types: list, since: datetime) -> float:
             query = (
@@ -109,6 +98,11 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
                 query = query.filter(BookingModel.branch_id == branch_id)
             return float(query.scalar() or 0)
 
+        def total_since(since: datetime) -> float:
+            # Money returned to customers is not revenue: refunds recorded by the
+            # payment webhook are subtracted so the totals reflect actual takings.
+            return sum_since(total_types, since) - sum_since(refund_types, since)
+
         return RevenueSummary(
             deposit_revenue=RevenueBreakdown(
                 today=sum_since(deposit_types, today_start),
@@ -117,9 +111,9 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
                 this_year=sum_since(deposit_types, year_start),
             ),
             total_revenue=RevenueBreakdown(
-                today=sum_since(total_types, today_start),
-                this_week=sum_since(total_types, week_start),
-                this_month=sum_since(total_types, month_start),
-                this_year=sum_since(total_types, year_start),
+                today=total_since(today_start),
+                this_week=total_since(week_start),
+                this_month=total_since(month_start),
+                this_year=total_since(year_start),
             ),
         )

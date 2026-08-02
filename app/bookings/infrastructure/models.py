@@ -3,7 +3,7 @@ from datetime import date as date_
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -28,6 +28,10 @@ class BookingDetailStatus(str, Enum):
 
 class BookingModel(Base):
     __tablename__ = "bookings"
+    __table_args__ = (
+        Index("ix_bookings_customer_id", "customer_id"),
+        Index("ix_bookings_branch_date", "branch_id", "booking_date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -62,6 +66,11 @@ class BookingModel(Base):
 
 class BookingDetailModel(Base):
     __tablename__ = "booking_details"
+    __table_args__ = (
+        Index("ix_booking_details_booking_id", "booking_id"),
+        Index("ix_booking_details_staff_start", "staff_id", "start_time"),
+        Index("ix_booking_details_preferred_staff", "preferred_staff_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -78,9 +87,12 @@ class BookingDetailModel(Base):
     staff_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("staff.id"), nullable=True
     )
-    # True when the CUSTOMER asked for this technician by name (doc 3.3b): such
-    # legs are pinned - reallocation must never swap them without a phone call.
-    staff_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # The technician the CUSTOMER asked for (doc 3.3b, softened): a note for
+    # the salon. The allocator ignores it; managers see it on
+    # /allocation/status and grant it by hand when the schedule allows.
+    preferred_staff_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("staff.id"), nullable=True
+    )
     custom_design_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("custom_designs.id"), nullable=True
     )

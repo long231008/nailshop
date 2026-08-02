@@ -26,7 +26,6 @@ from app.dashboard.presentation.router import router as dashboard_router
 from app.discounts.presentation.routers import router as discounts_router
 from app.me.presentation.routers import router as me_router
 from app.notification.infrastructure.senders import get_notification_sender
-from app.queue.presentation.routers import router as queue_router
 from app.schedule.presentation.routers import router as schedule_router
 from app.services.presentation.routers import router as services_router
 from app.shared.infrastructure.cache.redis_client import redis_client
@@ -132,8 +131,14 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
+# add_middleware() prepends, so runtime order is the reverse of this list:
+# RequestLogging -> CORS -> SlowAPI -> SecurityHeaders -> TrustedHost -> app.
+# CORS must sit OUTSIDE SlowAPI so a middleware-produced 429 still carries
+# CORS headers (a browser cannot read the error otherwise) and preflight
+# OPTIONS requests do not consume rate-limit budget.
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins_list,
@@ -141,7 +146,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 
@@ -164,7 +168,6 @@ app.include_router(allocation_router, prefix="/app")
 app.include_router(me_router, prefix="/app")
 app.include_router(staff_router, prefix="/app")
 app.include_router(custom_designs_router, prefix="/app")
-app.include_router(queue_router, prefix="/app")
 app.include_router(webhooks_router, prefix="/app")
 app.include_router(admin_router, prefix="/app")
 app.include_router(audit_log_router, prefix="/app")

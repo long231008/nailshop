@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.bookings.infrastructure.models import BookingModel, BookingStatus
-from app.shared.infrastructure.clock import now_utc
 from app.shared.infrastructure.config.settings import settings
 from app.webhooks.infrastructure.models import (
     PaymentTransactionModel,
@@ -25,10 +24,32 @@ class BookingNotFoundError(Exception):
 
 
 class AmountMismatchError(Exception):
-    def __init__(self, expected: Decimal, received: Decimal):
+    def __init__(self, expected: Decimal | None, received: Decimal):
         self.expected = expected
         self.received = received
         super().__init__(f"expected {expected}, received {received}")
+
+
+class BookingNotPayableError(Exception):
+    """The booking's state does not accept this transaction type."""
+
+
+class RefundExceedsPaymentsError(Exception):
+    """A refund larger than what was actually taken for the booking."""
+
+
+# Which booking states may take money. A deposit only ever belongs to an
+# APPROVED booking (approval is what sets deposit_amount); the balance may be
+# settled from approval through completion. Anything cancelled or no-show must
+# never be told "payment received" - that money needs a human, not a receipt.
+_PAYABLE_STATUSES = {
+    PaymentTransactionType.DEPOSIT: (BookingStatus.APPROVED,),
+    PaymentTransactionType.FINAL_PAYMENT: (
+        BookingStatus.APPROVED,
+        BookingStatus.IN_PROGRESS,
+        BookingStatus.COMPLETED,
+    ),
+}
 
 
 def verify_signature(raw_body: bytes, signature: str) -> None:
@@ -53,6 +74,65 @@ def _expected_amount(
     return None
 
 
+def _net_paid(db: Session, booking_id: UUID) -> Decimal:
+    """What the salon actually holds for this booking: successful deposits and
+    final payments, minus refunds already given back."""
+    rows = (
+        db.query(PaymentTransactionModel)
+        .filter(
+            PaymentTransactionModel.booking_id == booking_id,
+            PaymentTransactionModel.status == PaymentTransactionStatus.SUCCESS,
+        )
+        .all()
+    )
+    net = Decimal("0")
+    for row in rows:
+        amount = Decimal(str(row.amount))
+        if row.transaction_type == PaymentTransactionType.REFUND:
+            net -= amount
+        else:
+            net += amount
+    return net
+
+
+def _validate(
+    db: Session,
+    booking: BookingModel,
+    transaction_type: PaymentTransactionType,
+    received: Decimal,
+) -> None:
+    """Raise if a "successful" transaction must not be recorded as SUCCESS."""
+    allowed = _PAYABLE_STATUSES.get(transaction_type)
+    if allowed is not None and booking.status not in allowed:
+        raise BookingNotPayableError()
+
+    if transaction_type == PaymentTransactionType.REFUND:
+        if received > _net_paid(db, booking.id):
+            raise RefundExceedsPaymentsError()
+        return
+
+    expected = _expected_amount(booking, transaction_type)
+    if expected is None or received < expected:
+        raise AmountMismatchError(expected, received)
+
+    if received > expected:
+        # Overpayment is accepted (tips, rounding at the terminal) but must
+        # leave a trace for reconciliation.
+        db.add(
+            AuditLogModel(
+                actor_user_id=None,
+                action="payment.overpaid",
+                entity_type="booking",
+                entity_id=booking.id,
+                details={
+                    "transaction_type": transaction_type.value,
+                    "expected": float(expected),
+                    "received": float(received),
+                },
+            )
+        )
+
+
 def process_payment_webhook(
     db: Session,
     transaction_id: str,
@@ -61,12 +141,20 @@ def process_payment_webhook(
     transaction_type: PaymentTransactionType,
     succeeded: bool,
 ) -> tuple[PaymentTransactionModel, bool]:
+    """Record one provider event. Returns (transaction, newly_paid).
+
+    Idempotency: a transaction_id that was recorded as SUCCESS is immutable -
+    the stored outcome is returned and no side effect repeats. A transaction_id
+    recorded as FAILED is re-validated against the booking's CURRENT state, so
+    a provider that retries the same event after the salon fixed the underlying
+    problem (e.g. approved the booking) heals instead of being stuck forever.
+    """
     existing = (
         db.query(PaymentTransactionModel)
         .filter(PaymentTransactionModel.provider_transaction_id == transaction_id)
         .first()
     )
-    if existing is not None:
+    if existing is not None and existing.status == PaymentTransactionStatus.SUCCESS:
         return existing, False
 
     booking = db.get(BookingModel, booking_id)
@@ -74,53 +162,42 @@ def process_payment_webhook(
         raise BookingNotFoundError()
 
     received = Decimal(str(amount))
-    status = PaymentTransactionStatus.SUCCESS if succeeded else PaymentTransactionStatus.FAILED
 
-    # A "successful" payment that does not cover what is owed must not unlock the
-    # booking. It is recorded as FAILED so there is still a trace of the attempt.
     if succeeded:
-        expected = _expected_amount(booking, transaction_type)
-        if expected is not None and received < expected:
-            transaction = PaymentTransactionModel(
-                booking_id=booking_id,
-                provider_transaction_id=transaction_id,
-                amount=received,
-                transaction_type=transaction_type,
-                status=PaymentTransactionStatus.FAILED,
-            )
-            db.add(transaction)
+        try:
+            _validate(db, booking, transaction_type, received)
+        except (AmountMismatchError, BookingNotPayableError, RefundExceedsPaymentsError):
+            # Keep an audit trace of the refused attempt, then tell the
+            # provider it did not count.
+            if existing is None:
+                db.add(
+                    PaymentTransactionModel(
+                        booking_id=booking_id,
+                        provider_transaction_id=transaction_id,
+                        amount=received,
+                        transaction_type=transaction_type,
+                        status=PaymentTransactionStatus.FAILED,
+                    )
+                )
             db.commit()
-            raise AmountMismatchError(expected, received)
+            raise
 
-    transaction = PaymentTransactionModel(
-        booking_id=booking_id,
-        provider_transaction_id=transaction_id,
-        amount=received,
-        transaction_type=transaction_type,
-        status=status,
-    )
-    db.add(transaction)
-
-    # A deposit that arrives while the booking is still pending confirms it on the
-    # spot - the customer has already put money down. Only when deposit_amount is
-    # known, so the amount check above has actually run.
-    if (
-        status == PaymentTransactionStatus.SUCCESS
-        and transaction_type == PaymentTransactionType.DEPOSIT
-        and booking.status == BookingStatus.PENDING
-        and booking.deposit_amount is not None
-    ):
-        booking.status = BookingStatus.APPROVED
-        booking.approved_at = now_utc()
-        db.add(
-            AuditLogModel(
-                actor_user_id=None,
-                action="booking.approved",
-                entity_type="booking",
-                entity_id=booking.id,
-                details={"reason": "deposit received while booking was pending"},
-            )
+    status = PaymentTransactionStatus.SUCCESS if succeeded else PaymentTransactionStatus.FAILED
+    if existing is not None:
+        # A FAILED row being retried: the validation above has passed (or the
+        # provider now reports failure again) - record the current outcome.
+        existing.amount = received
+        existing.status = status
+        transaction = existing
+    else:
+        transaction = PaymentTransactionModel(
+            booking_id=booking_id,
+            provider_transaction_id=transaction_id,
+            amount=received,
+            transaction_type=transaction_type,
+            status=status,
         )
+        db.add(transaction)
 
     db.commit()
     db.refresh(transaction)

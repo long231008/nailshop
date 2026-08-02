@@ -12,11 +12,13 @@ from app.shared.infrastructure.database.session import get_db
 from app.webhooks.application.payment import (
     AmountMismatchError,
     BookingNotFoundError,
+    BookingNotPayableError,
     InvalidSignatureError,
+    RefundExceedsPaymentsError,
     process_payment_webhook,
     verify_signature,
 )
-from app.webhooks.infrastructure.models import PaymentTransactionType
+from app.webhooks.infrastructure.models import PaymentTransactionStatus, PaymentTransactionType
 from app.webhooks.presentation.schemas import PaymentWebhookPayload
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -95,6 +97,20 @@ async def payment_webhook(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payment amount does not match the amount due",
         )
+    except BookingNotPayableError:
+        # e.g. a deposit for a booking that was already cancelled by the
+        # expiry sweep - the customer must never be told it is confirmed.
+        if transaction_type == PaymentTransactionType.DEPOSIT:
+            _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=False)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This booking is not accepting payments in its current state",
+        )
+    except RefundExceedsPaymentsError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refund exceeds the amount paid for this booking",
+        )
 
     if transaction_type == PaymentTransactionType.DEPOSIT:
         if counts_as_paid:
@@ -103,8 +119,11 @@ async def payment_webhook(
         elif payload.status == "failed":
             _notify_deposit_outcome(db, notification_sender, payload.booking_id, confirmed=False)
 
+    # "processed" reports the stored outcome, not whether this call did new work:
+    # a replay of an already-recorded success must keep answering true, or a
+    # provider that retries until it sees true would retry forever.
     return {
         "status": "ok",
         "transaction_id": transaction.provider_transaction_id,
-        "processed": counts_as_paid,
+        "processed": transaction.status == PaymentTransactionStatus.SUCCESS,
     }

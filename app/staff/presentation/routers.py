@@ -9,6 +9,7 @@ from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.staff.application.schedule import get_staff_schedule
 from app.staff.application.start_service import (
     BookingDetailNotFoundError,
+    BookingNotStartableError,
     StaffBusyError,
     start_service,
 )
@@ -117,6 +118,8 @@ def start_service_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail="This staff member is already serving another customer",
         )
+    except BookingNotStartableError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.detail)
 
     return StaffAppointment(
         booking_id=detail.booking_id,

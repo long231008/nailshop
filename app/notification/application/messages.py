@@ -95,6 +95,20 @@ def design_priced_notification(
     )
 
 
+def booking_cancelled_by_salon_notification(
+    phone_number: str | None, email: str | None
+) -> Notification:
+    return Notification(
+        subject="Your booking was cancelled by the salon",
+        body=(
+            "We are sorry - the salon had to cancel your booking. "
+            "Please contact us to rebook. Any deposit you paid will be refunded."
+        ),
+        phone_number=phone_number,
+        email=email,
+    )
+
+
 def booking_cancelled_notification(phone_number: str | None, email: str | None) -> Notification:
     return Notification(
         subject="Your booking was released",

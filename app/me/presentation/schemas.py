@@ -13,6 +13,10 @@ class MyProfileResponse(BaseModel):
     role: str
     status: str
     created_at: datetime
+    # Present when this account has a staff profile - lets the staff app find
+    # its own schedule and start-service endpoints without admin help.
+    staff_id: UUID | None = None
+    staff_display_name: str | None = None
 
 
 class MyProfileUpdateRequest(BaseModel):

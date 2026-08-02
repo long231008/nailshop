@@ -3,7 +3,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.allocation.application.roster import release_pin_if_unused
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.bookings.application.exceptions import (
     BookingNotFoundError,
@@ -12,7 +11,12 @@ from app.bookings.application.exceptions import (
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.custom_designs.infrastructure.models import CustomDesignModel, CustomDesignStatus
-from app.shared.infrastructure.clock import now_utc, shop_timezone
+from app.shared.infrastructure.clock import now_utc
+from app.webhooks.infrastructure.models import (
+    PaymentTransactionModel,
+    PaymentTransactionStatus,
+    PaymentTransactionType,
+)
 
 
 def release_designs(db: Session, booking_id) -> None:
@@ -37,6 +41,43 @@ CANCELLABLE_STATUSES = (BookingStatus.PENDING, BookingStatus.APPROVED)
 MIN_NOTICE_HOURS = 2
 
 
+def _finalize_cancel(
+    db: Session, booking: BookingModel, actor_user_id: UUID, action: str
+) -> BookingModel:
+    booking.status = BookingStatus.CANCELLED
+    db.flush()
+    release_designs(db, booking.id)
+    # There is no automatic refund: if the deposit was already taken, the audit
+    # entry flags it so the salon knows a refund decision is owed to the customer.
+    deposit_paid = (
+        db.query(PaymentTransactionModel)
+        .filter(
+            PaymentTransactionModel.booking_id == booking.id,
+            PaymentTransactionModel.transaction_type == PaymentTransactionType.DEPOSIT,
+            PaymentTransactionModel.status == PaymentTransactionStatus.SUCCESS,
+        )
+        .first()
+        is not None
+    )
+    db.add(
+        AuditLogModel(
+            actor_user_id=actor_user_id,
+            action=action,
+            entity_type="booking",
+            entity_id=booking.id,
+            details={
+                "deposit_paid": deposit_paid,
+                "deposit_amount": float(booking.deposit_amount)
+                if deposit_paid and booking.deposit_amount is not None
+                else None,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(booking)
+    return booking
+
+
 def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingModel:
     booking = db.get(BookingModel, booking_id)
     if booking is None:
@@ -59,33 +100,17 @@ def cancel_booking(db: Session, booking_id: UUID, customer_id: UUID) -> BookingM
             "before the appointment. Please contact the salon."
         )
 
-    booking.status = BookingStatus.CANCELLED
-    # The session runs with autoflush=False: push the CANCELLED status now so
-    # the pin-release query below no longer counts this booking as active.
-    db.flush()
-    release_designs(db, booking.id)
-    # Cancelling the last named booking of (tech, day) releases the exclusive
-    # pin, so other salons may claim the technician again (doc 3.3b).
-    named_details = (
-        db.query(BookingDetailModel)
-        .filter(
-            BookingDetailModel.booking_id == booking.id,
-            BookingDetailModel.staff_requested.is_(True),
-            BookingDetailModel.staff_id.isnot(None),
-        )
-        .all()
-    )
-    for detail in named_details:
-        day = detail.start_time.astimezone(shop_timezone()).date()
-        release_pin_if_unused(db, detail.staff_id, day)
-    db.add(
-        AuditLogModel(
-            actor_user_id=customer_id,
-            action="booking.cancelled_by_customer",
-            entity_type="booking",
-            entity_id=booking.id,
-        )
-    )
-    db.commit()
-    db.refresh(booking)
-    return booking
+    return _finalize_cancel(db, booking, customer_id, "booking.cancelled_by_customer")
+
+
+def cancel_booking_by_salon(db: Session, booking_id: UUID, actor_user_id: UUID) -> BookingModel:
+    """The salon's own cancellation: no ownership check and no notice window -
+    the desk may cancel right up to the appointment. The distinct audit action
+    keeps salon and customer cancellations tellable apart."""
+    booking = db.get(BookingModel, booking_id)
+    if booking is None:
+        raise BookingNotFoundError()
+    if booking.status not in CANCELLABLE_STATUSES:
+        raise InvalidBookingStateError("Only pending or approved bookings can be cancelled")
+
+    return _finalize_cancel(db, booking, actor_user_id, "booking.cancelled_by_salon")

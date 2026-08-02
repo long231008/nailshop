@@ -12,7 +12,10 @@ from app.shared.infrastructure.database.base import Base
 
 class StaffStatus(str, Enum):
     ACTIVE = "active"
+    # Off the schedule (never rostered or assigned) but still visible in the
+    # capability-matrix editor - e.g. on leave, coming back.
     RESERVED = "reserved"
+    # Off the schedule AND hidden everywhere; future work was released.
     BLOCKED = "blocked"
 
 
@@ -27,7 +30,7 @@ class StaffModel(Base):
     )
     # Technicians belong to the CHAIN, not to one salon. This is only the home
     # branch *preference* (may be empty): each day's actual branch is decided by
-    # customer pins and the nightly Step A allocation (staff_day_assignments).
+    # the nightly Step A allocation (staff_day_assignments).
     branch_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("locations.id"), nullable=True
     )
@@ -41,7 +44,7 @@ class StaffModel(Base):
     )
     can_price_custom_designs: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Delegated by an admin: lets this staff member lock/unlock time slots at
-    # their branch (e.g. when a slot is already full with walk-ins).
+    # their branch (e.g. to close a slot for cleaning or training).
     can_lock_slots: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Weekly days off as comma-separated weekday numbers (0=Monday .. 6=Sunday).
     # Feeds the capacity ledger: a day off removes the tech from that day's lanes.

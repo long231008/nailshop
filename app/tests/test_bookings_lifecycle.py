@@ -115,6 +115,24 @@ def test_customer_can_view_own_status_but_not_others(
     assert other.status_code == 403
 
 
+def _move_leg_to_today(db_session, detail_id, hour):
+    """start_service only accepts today's legs; tests book 2 days out to dodge
+    the 21:00 freeze, so slide the leg back to today before starting it."""
+    from datetime import datetime, time, timezone
+
+    from app.bookings.infrastructure.models import BookingDetailModel
+    from app.shared.infrastructure.clock import shop_timezone, today_in_shop_tz
+
+    detail = db_session.get(BookingDetailModel, uuid_lib.UUID(detail_id))
+    start = datetime.combine(
+        today_in_shop_tz(), time(hour=hour), tzinfo=shop_timezone()
+    ).astimezone(timezone.utc)
+    delta = start - detail.start_time
+    detail.start_time = start
+    detail.end_time = detail.end_time + delta
+    db_session.commit()
+
+
 def test_start_service_and_complete_flow(
     client,
     admin_headers,
@@ -124,6 +142,7 @@ def test_start_service_and_complete_flow(
     seeded_service,
     seeded_shift,
     cleanup_records,
+    db_session,
 ):
     booking = _create_booking(
         client,
@@ -136,6 +155,14 @@ def test_start_service_and_complete_flow(
     )
     client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
     detail_id = booking["details"][0]["id"]
+
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+    _move_leg_to_today(db_session, detail_id, hour=10)
 
     start_response = client.post(
         f"/app/staff/{seeded_staff['staff_id']}/start-service",
@@ -163,6 +190,7 @@ def test_staff_cannot_start_service_while_busy_with_another(
     seeded_service,
     seeded_shift,
     cleanup_records,
+    db_session,
 ):
     first = _create_booking(
         client,
@@ -174,11 +202,6 @@ def test_staff_cannot_start_service_while_busy_with_another(
         cleanup_records,
     )
     client.post(f"/app/bookings/{first['id']}/approve", headers=admin_headers)
-    client.post(
-        f"/app/staff/{seeded_staff['staff_id']}/start-service",
-        json={"booking_detail_id": first["details"][0]["id"]},
-        headers=seeded_staff["headers"],
-    )
 
     second_payload = {
         "branch_id": str(seeded_branch),
@@ -193,6 +216,22 @@ def test_staff_cannot_start_service_while_busy_with_another(
     second = client.post("/app/bookings", json=second_payload, headers=customer_headers)
     cleanup_records.append(("bookings", second.json()["id"]))
     cleanup_records.append(("booking_details", second.json()["details"][0]["id"]))
+    client.post(f"/app/bookings/{second.json()['id']}/approve", headers=admin_headers)
+
+    from app.allocation.application.materialize import materialize_day
+    from app.shared.infrastructure.clock import shop_timezone
+
+    day = seeded_shift["start"].astimezone(shop_timezone()).date()
+    run = materialize_day(db_session, seeded_branch, day)
+    cleanup_records.append(("allocation_runs", run.id))
+    _move_leg_to_today(db_session, first["details"][0]["id"], hour=10)
+    _move_leg_to_today(db_session, second.json()["details"][0]["id"], hour=13)
+
+    client.post(
+        f"/app/staff/{seeded_staff['staff_id']}/start-service",
+        json={"booking_detail_id": first["details"][0]["id"]},
+        headers=seeded_staff["headers"],
+    )
 
     response = client.post(
         f"/app/staff/{seeded_staff['staff_id']}/start-service",
@@ -295,3 +334,118 @@ def test_complete_manual_final_price_and_bill(
     assert bill["total"] == 25.0
     assert bill["deposit"] == 6.0
     assert bill["remaining"] == 19.0
+
+
+def test_cancel_after_paid_deposit_flags_refund_in_audit(
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
+):
+    import hashlib
+    import hmac
+    import json
+
+    from app.shared.infrastructure.config.settings import settings
+
+    booking = _create_booking(
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
+        cleanup_records,
+    )
+    approve = client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers).json()
+
+    body = json.dumps(
+        {
+            "transaction_id": str(uuid_lib.uuid4()),
+            "booking_id": booking["id"],
+            "amount": approve["deposit_amount"],
+            "transaction_type": "deposit",
+        }
+    ).encode()
+    signature = hmac.new(settings.PAYMENT_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    paid = client.post(
+        "/app/webhooks/payment",
+        content=body,
+        headers={"X-Signature": signature, "Content-Type": "application/json"},
+    )
+    assert paid.status_code == 200
+
+    response = client.post(f"/app/bookings/{booking['id']}/cancel", headers=customer_headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+    from app.webhooks.infrastructure.models import PaymentTransactionModel
+
+    transaction = (
+        db_session.query(PaymentTransactionModel)
+        .filter(PaymentTransactionModel.booking_id == uuid_lib.UUID(booking["id"]))
+        .first()
+    )
+    cleanup_records.append(("payment_transactions", transaction.id))
+
+    log_entry = (
+        db_session.query(AuditLogModel)
+        .filter(
+            AuditLogModel.entity_id == uuid_lib.UUID(booking["id"]),
+            AuditLogModel.action == "booking.cancelled_by_customer",
+        )
+        .first()
+    )
+    cleanup_records.append(("audit_logs", log_entry.id))
+    # No automatic refund exists: the audit entry tells the salon money is owed.
+    assert log_entry.details["deposit_paid"] is True
+    assert log_entry.details["deposit_amount"] == approve["deposit_amount"]
+
+
+def test_salon_cancel_ignores_ownership_and_notice_window(
+    client,
+    admin_headers,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+    db_session,
+):
+    booking = _create_booking(
+        client,
+        customer_headers,
+        seeded_branch,
+        seeded_service,
+        seeded_staff,
+        seeded_shift,
+        cleanup_records,
+    )
+
+    response = client.post(f"/app/bookings/{booking['id']}/salon-cancel", headers=admin_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "cancelled"
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+
+    log_entry = (
+        db_session.query(AuditLogModel)
+        .filter(
+            AuditLogModel.entity_id == uuid_lib.UUID(booking["id"]),
+            AuditLogModel.action == "booking.cancelled_by_salon",
+        )
+        .first()
+    )
+    cleanup_records.append(("audit_logs", log_entry.id))
+    assert log_entry.details["deposit_paid"] is False
+
+    # Customers cannot use the salon-side endpoint.
+    other = client.post(f"/app/bookings/{booking['id']}/salon-cancel", headers=customer_headers)
+    assert other.status_code == 403

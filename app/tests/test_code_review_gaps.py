@@ -90,10 +90,19 @@ def test_gap_3_expire_soft_locks_safeguard_when_redis_key_lost(
     assert booking.status == BookingStatus.APPROVED
 
 
-def test_gap_4_payment_webhook_updates_pending_booking_status(
+def test_gap_4_deposit_for_unapproved_booking_is_refused(
     db_session, seeded_branch, cleanup_records
 ):
-    """REVIEW FINDING: process_payment_webhook should update booking status when deposit payment succeeds."""
+    """A deposit only ever belongs to an APPROVED booking: money arriving for a
+    PENDING one is recorded FAILED and the booking is left untouched."""
+    import pytest
+
+    from app.webhooks.application.payment import BookingNotPayableError
+    from app.webhooks.infrastructure.models import (
+        PaymentTransactionModel,
+        PaymentTransactionStatus,
+    )
+
     user = UserModel(
         phone_number=f"09{uuid.uuid4().int % 10**8:08d}",
         status=UserStatus.ACTIVE,
@@ -117,18 +126,22 @@ def test_gap_4_payment_webhook_updates_pending_booking_status(
     cleanup_records.append(("bookings", booking.id))
 
     tx_id = f"tx_{uuid.uuid4().hex[:8]}"
-    tx, _ = process_payment_webhook(
-        db_session,
-        transaction_id=tx_id,
-        booking_id=booking.id,
-        amount=30.0,
-        transaction_type=PaymentTransactionType.DEPOSIT,
-        succeeded=True,
+    with pytest.raises(BookingNotPayableError):
+        process_payment_webhook(
+            db_session,
+            transaction_id=tx_id,
+            booking_id=booking.id,
+            amount=30.0,
+            transaction_type=PaymentTransactionType.DEPOSIT,
+            succeeded=True,
+        )
+
+    tx = (
+        db_session.query(PaymentTransactionModel)
+        .filter(PaymentTransactionModel.provider_transaction_id == tx_id)
+        .first()
     )
-
     cleanup_records.append(("payment_transactions", tx.id))
-
+    assert tx.status == PaymentTransactionStatus.FAILED
     db_session.refresh(booking)
-    # EXPECTATION FOR PR REVIEW: Booking status should update to APPROVED upon successful deposit
-    # CURRENT FLOW FAIL: Status remains PENDING because process_payment_webhook does not update booking.status
-    assert booking.status == BookingStatus.APPROVED
+    assert booking.status == BookingStatus.PENDING

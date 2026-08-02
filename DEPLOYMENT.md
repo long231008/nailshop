@@ -13,9 +13,9 @@ header the app already sends is ignored by browsers unless the page is served
 over TLS.
 
 Terminate TLS at the ingress/proxy (Caddy, nginx, or a managed load balancer)
-and redirect all HTTP traffic to HTTPS. With Kubernetes, the manifests in `k8s/`
-expect cert-manager to issue the certificate; add the TLS block and the
-redirect annotation to `k8s/ingress.yaml`.
+and redirect all HTTP traffic to HTTPS. With Kubernetes, `k8s/ingress.yaml`
+already carries the TLS block and the redirect annotations; it expects
+cert-manager and a ClusterIssuer named `letsencrypt-prod`.
 
 Behind a proxy, also set:
 
@@ -46,6 +46,12 @@ visitor's browser. List only your own frontend.
 host-header injection, where a request claiming `Host: evil.example` makes the
 app generate links pointing at the attacker's domain. List only your API's
 domain(s).
+
+Anything that health-checks the API must send one of these hosts. Kubernetes
+probes dial the pod IP, so `k8s/deployment.yaml` sets an explicit `Host`
+header on all three probes — without it every probe gets `400 Invalid host
+header` and the pod never becomes ready. Do the same for any external
+uptime monitor.
 
 The frontend needs its own `.env` at build time:
 
