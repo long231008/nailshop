@@ -52,29 +52,29 @@ def test_verified_email_change_flow(client, fake_redis, customer_identity, db_se
 
 
 def test_cannot_claim_an_email_another_account_already_uses(
-    client, customer_identity, other_customer_headers, db_session, cleanup_identifiers
+    client, customer_identity, db_session, cleanup_records, unique_email
 ):
-    taken = "taken@example.com"
-    cleanup_identifiers["emails"].append(taken)
+    import uuid as uuid_lib
 
-    # Give the other customer that address directly.
-    others = (
-        db_session.query(UserModel)
-        .filter(UserModel.id != customer_identity["id"], UserModel.email.is_(None))
-        .all()
+    from app.auth.domain.value_object import UserRole, UserStatus
+
+    # A dedicated holder of the address - never borrow a real row from the
+    # shared dev database.
+    holder = UserModel(
+        phone_number=f"09{uuid_lib.uuid4().int % 10**8:08d}",
+        email=unique_email,
+        status=UserStatus.ACTIVE,
+        role=UserRole.CUSTOMER,
     )
-    victim = others[-1]
-    victim.email = taken
+    db_session.add(holder)
     db_session.commit()
+    cleanup_records.append(("users", holder.id))
 
     response = client.post(
-        "/app/me/email", json={"email": taken}, headers=customer_identity["headers"]
+        "/app/me/email", json={"email": unique_email}, headers=customer_identity["headers"]
     )
 
     assert response.status_code == 409
-
-    victim.email = None
-    db_session.commit()
 
 
 def test_confirm_without_a_pending_change_is_rejected(client, customer_identity):
