@@ -1,7 +1,8 @@
 # API flows
 
-How the system's ~70 endpoints (19 routers, all mounted under `/app`) compose
-into the five journeys that matter. Paths below include the `/app` prefix.
+How the system's ~65 endpoints (18 routers, all mounted under `/app`) compose
+into the four journeys that matter. The shop is appointment-only: there is no
+walk-in queue, and every expected technician is sellable (no capacity reserve). Paths below include the `/app` prefix.
 Role notes: `require_roles(...)` always also admits ADMIN, and role/status are
 re-read from the database on every request, so blocking an account takes
 effect immediately.
@@ -26,9 +27,10 @@ services plus the global NULL-branch ones), `GET /services`,
 via Facebook), `too_far` (beyond 14 days), or `closed` (same-day, or past
 21:00 local on D-1 — the freeze that lets the nightly allocation work on
 fixed demand). Any-tech slots are sold against the capacity ledger: one lane
-= one overlapping customer per 15-minute slot per skill group, capped at
-`max(1, floor(CAP_FILL × expected techs of the group))`; leg length is the
-slowest eligible tech's real minutes (capability matrix), grid-snapped.
+= one overlapping customer per 15-minute slot per skill group, capped at the
+number of expected techs of that group (full capacity - appointment-only, no
+reserve); leg length is the slowest eligible tech's real minutes (capability
+matrix), grid-snapped.
 Named-tech slots check that tech's personal timeline instead. Candidate
 starts run 09:00–17:30 inclusive; a 17:30 start may run past 18:00 closing
 by explicit choice.
@@ -80,26 +82,7 @@ booking completes when all legs are done. Admin-only:
 `transaction_type=final_payment` (expected = (final_price or total_price) −
 deposit).
 
-## 2. Walk-in via QR queue
-
-1. `POST /queue/scan` (public, 10/min per IP): mints ticket
-   `W-{yymmdd}-{branch4hex}-{seq}` under a per-branch-per-day advisory lock;
-   status WAITING.
-2. `GET /queue/public` (public): anonymized number/status/position board.
-3. `GET /queue` (ADMIN): walk-in lane plus the "vip" list of approved
-   bookings.
-4. `GET /allocation/walkin-options?branch_id&service_id` (STAFF): for each
-   tech on today's frozen roster, the earliest gap fitting real minutes +
-   buffer + a 10-minute guard band, within a 240-minute wait; legs still
-   waiting for a technician (unassigned by the nightly run) block seats too.
-   Sorted by earliest seat, then fewest turns today (turn ledger rebuilt from
-   bookings, never stored). Advisory only — nothing is reserved.
-5. `POST /queue/{ticket_id}/{call|serve|done|cancel}` (STAFF) drives
-   WAITING → CALLED → IN_SERVICE → DONE; cancel only from WAITING/CALLED.
-
-Queue tickets never convert into bookings; walk-in revenue is off-system.
-
-## 3. Custom design: request → quote → book
+## 2. Custom design: request → quote → book
 
 1. `POST /custom-designs` (CUSTOMER, 10/hour per IP, multipart): photo
    and/or description, ≤8 MB, image content types only, max 10 open requests
@@ -117,7 +100,7 @@ Queue tickets never convert into bookings; walk-in revenue is off-system.
    so it can be rebooked.
 5. The tech sees the design image and description inline on the day schedule.
 
-## 4. Technician daily cycle
+## 3. Technician daily cycle
 
 **21:00 close (cron + 21:20 watchdog, Redis-guarded, idempotent).**
 `run_nightly_allocation` targets tomorrow (skips Sundays):
@@ -129,7 +112,7 @@ Queue tickets never convert into bookings; walk-in revenue is off-system.
   names a tech for every unassigned leg — fewest turns first, then
   same-booking continuity, then customer affinity, then longest idle — and
   shrinks the leg from the cautious planning hold to the tech's real
-  minutes; the slack becomes next-morning walk-in room. Legs nobody can
+  minutes, so timelines show when each tech is really free. Legs nobody can
   serve stay unassigned and are logged for a human: the repair ladder is
   deliberately not automated.
 
@@ -148,9 +131,9 @@ IN_PROGRESS (one customer at a time per tech);
 `POST /bookings/{id}/complete` finishes legs. Staff with `can_lock_slots`
 manage slot locks at their own branch.
 
-## 5. Admin loop
+## 4. Admin loop
 
-- **Dashboard**: `GET /dashboard/summary` (today's counts, queue, unpriced
+- **Dashboard**: `GET /dashboard/summary` (today's counts, unpriced
   designs, headcount) and `GET /dashboard/revenue` (deposit vs total for
   today/week/month/year; refunds subtracted from totals).
 - **Booking desk**: `GET /bookings` with filters; approve / no-show /

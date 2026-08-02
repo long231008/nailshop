@@ -64,7 +64,7 @@ ACTIVE_BOOKING_STATUSES = [
 WINDOW_MESSAGES = {
     BookingWindow.CLOSED: (
         "Bookings for this day have closed (they close at 21:00 the evening "
-        "before). Please walk in, or pick a later day."
+        "before). Please pick a later day, or contact the salon."
     ),
     BookingWindow.TOO_FAR: "This date is beyond the booking horizon",
     BookingWindow.CLOSED_DAY: (

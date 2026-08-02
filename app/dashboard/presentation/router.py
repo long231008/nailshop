@@ -39,7 +39,6 @@ def dashboard_summary(
             cancelled=summary.bookings_today.cancelled,
             no_show=summary.bookings_today.no_show,
         ),
-        queue_waiting_count=summary.queue_waiting_count,
         pending_custom_designs=summary.pending_custom_designs,
         active_staff_count=summary.active_staff_count,
     )

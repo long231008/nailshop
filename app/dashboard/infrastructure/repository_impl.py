@@ -13,7 +13,6 @@ from app.dashboard.domain.entities import (
     RevenueSummary,
 )
 from app.dashboard.domain.repository import DashboardRepository
-from app.queue.infrastructure.models import QueueTicketModel, QueueTicketStatus, QueueTicketType
 from app.shared.infrastructure.clock import (
     start_of_day_utc,
     start_of_month_utc,
@@ -40,14 +39,6 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
         counts = {status: 0 for status in BookingStatus}
         for booking in booking_query.all():
             counts[booking.status] += 1
-
-        queue_query = self._db.query(QueueTicketModel).filter(
-            QueueTicketModel.ticket_type == QueueTicketType.WALKIN,
-            QueueTicketModel.status == QueueTicketStatus.WAITING,
-        )
-        if branch_id is not None:
-            queue_query = queue_query.filter(QueueTicketModel.branch_id == branch_id)
-        queue_waiting_count = queue_query.count()
 
         # Custom designs are not tied to a branch, so this figure is global. When a
         # branch filter is active it is still shown - a request waiting to be priced
@@ -79,7 +70,6 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
                 cancelled=counts[BookingStatus.CANCELLED],
                 no_show=counts[BookingStatus.NO_SHOW],
             ),
-            queue_waiting_count=queue_waiting_count,
             pending_custom_designs=pending_custom_designs,
             active_staff_count=active_staff_count,
         )

@@ -16,7 +16,6 @@ class BookingStatusCounts:
 class DashboardSummary:
     date: date
     bookings_today: BookingStatusCounts
-    queue_waiting_count: int
     pending_custom_designs: int
     active_staff_count: int
 

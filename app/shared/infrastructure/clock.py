@@ -1,7 +1,7 @@
 """Time helpers anchored to the shop's local timezone.
 
 Everything is stored and compared in UTC. These helpers only decide *where a day
-starts*: opening hours, "today" on the dashboard and the daily walk-in counter all
+starts*: opening hours and "today" on the dashboard all
 follow the shop's wall clock, which drifts from UTC whenever the UK is on BST.
 """
 

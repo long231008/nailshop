@@ -3,7 +3,7 @@
 Runs after the day's booking window has closed, so demand is complete and
 immutable. Start times were promised to customers and stay fixed; this is pure
 interval assignment. Each leg shrinks from its cautious planning duration to the
-assigned tech's real minutes - the slack becomes walk-in room the next morning.
+assigned tech's real minutes, so timelines reflect when techs actually finish.
 
 Fairness follows the salon turn system (doc 3.5): every assignment adds the
 service's turn weight to the tech's ledger, and the next any-tech leg goes to
@@ -143,8 +143,8 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         )
 
         detail.staff_id = staff.id
-        # Shrink to the assigned tech's real minutes (v3.2): the difference
-        # between the cautious hold and reality becomes walk-in room.
+        # Shrink to the assigned tech's real minutes (v3.2) so the timeline
+        # shows when the tech is really free again.
         detail.end_time = real_end
         detail.duration_min = int((real_end - detail.start_time).total_seconds() // 60)
         timelines[staff.id].append((detail.start_time, hold_end))

@@ -364,7 +364,7 @@ def test_availability_never_offers_past_slots(client, seeded_staff, seeded_servi
     assert response.status_code == 200
     body = response.json()
     # Same-day booking closed at 21:00 yesterday (capacity model): today never
-    # offers online slots - walk-ins are seated at the desk - so a past time
+    # offers online slots for future days only, so a past time
     # can never be offered either.
     assert body["window"] in ("closed", "closed_day")
     assert body["slots"] == []

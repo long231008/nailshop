@@ -43,9 +43,6 @@ class Settings(BaseSettings):
     # nightly allocation can assign technicians to a demand that no longer moves.
     BOOKING_HORIZON_DAYS: int = 14
     BOOKING_CLOSE_HOUR: int = 21
-    # Share of expected technicians that may be sold per 15' slot; the remainder
-    # is the walk-in lane plus the staffing-surprise cushion.
-    CAP_FILL: float = 0.85
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.
     # "live" delivers for real: SMS to phone numbers, email to addresses.

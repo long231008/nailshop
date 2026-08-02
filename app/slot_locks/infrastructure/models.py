@@ -11,7 +11,7 @@ from app.shared.infrastructure.database.base import Base
 class SlotLockModel(Base):
     """A time range closed for new bookings.
 
-    staff_id NULL locks the whole branch (e.g. the slot is full of walk-ins);
+    staff_id NULL locks the whole branch (e.g. a staff meeting or deep clean);
     otherwise only that staff member is blocked.
     """
 

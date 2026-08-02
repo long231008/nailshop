@@ -41,7 +41,7 @@ class StaffModel(Base):
     )
     can_price_custom_designs: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Delegated by an admin: lets this staff member lock/unlock time slots at
-    # their branch (e.g. when a slot is already full with walk-ins).
+    # their branch (e.g. to close a slot for cleaning or training).
     can_lock_slots: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Weekly days off as comma-separated weekday numbers (0=Monday .. 6=Sunday).
     # Feeds the capacity ledger: a day off removes the tech from that day's lanes.

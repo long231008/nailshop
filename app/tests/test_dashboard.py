@@ -39,7 +39,7 @@ def _create_transaction(db_session, cleanup_records, booking_id, amount, transac
     return transaction
 
 
-def test_dashboard_summary_counts_bookings_and_queue(
+def test_dashboard_summary_counts_bookings(
     client,
     admin_headers,
     seeded_branch,
@@ -50,9 +50,6 @@ def test_dashboard_summary_counts_bookings_and_queue(
 ):
     _create_booking(db_session, cleanup_records, customer_identity["id"], seeded_branch)
 
-    ticket = client.post("/app/queue/scan", json={"branch_id": str(seeded_branch)}).json()
-    cleanup_records.append(("queue_tickets", ticket["id"]))
-
     response = client.get(
         "/app/dashboard/summary", params={"branch_id": str(seeded_branch)}, headers=admin_headers
     )
@@ -60,7 +57,6 @@ def test_dashboard_summary_counts_bookings_and_queue(
     assert response.status_code == 200
     body = response.json()
     assert body["bookings_today"]["completed"] == 1
-    assert body["queue_waiting_count"] == 1
     assert body["active_staff_count"] == 1
     assert "revenue_today" not in body
 

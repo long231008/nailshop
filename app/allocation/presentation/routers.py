@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from app.allocation.application.materialize import materialize_day, release_staff_assignments
 from app.allocation.application.roster import solve_day
-from app.allocation.application.walkin import WalkInServiceNotFoundError, find_walkin_options
 from app.allocation.infrastructure.assignments import StaffDayAssignmentModel
 from app.allocation.infrastructure.models import AllocationRunModel
 from app.allocation.presentation.schemas import (
@@ -15,7 +14,6 @@ from app.allocation.presentation.schemas import (
     AllocationStatusResponse,
     RosterEntry,
     UnassignedLeg,
-    WalkInOption,
 )
 from app.auth.domain.value_object import UserRole
 from app.availability.application.capacity import ACTIVE_BOOKING_STATUSES
@@ -132,16 +130,3 @@ def allocation_status(
         runs=[_run_response(run) for run in runs], roster=roster, unassigned=unassigned
     )
 
-
-@router.get("/walkin-options", response_model=list[WalkInOption])
-def walkin_options(
-    branch_id: UUID,
-    service_id: UUID,
-    db: Session = Depends(get_db),
-    _=Depends(require_roles(UserRole.ADMIN, UserRole.STAFF)),
-) -> list[WalkInOption]:
-    try:
-        options = find_walkin_options(db, branch_id, service_id)
-    except WalkInServiceNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
-    return [WalkInOption(**option) for option in options]

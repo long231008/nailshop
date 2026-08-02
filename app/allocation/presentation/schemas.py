@@ -44,11 +44,3 @@ class AllocationStatusResponse(BaseModel):
     roster: list[RosterEntry]
     unassigned: list[UnassignedLeg]
 
-
-class WalkInOption(BaseModel):
-    staff_id: UUID
-    staff_name: str
-    start_time: datetime
-    end_time: datetime
-    wait_minutes: int
-    turns_today: float

@@ -13,14 +13,13 @@ code comments actually live.
 | `branches` | `locations` table + public catalog views | Global (NULL-branch) services merge into every branch. |
 | `services` | services, length extensions | `duration_min` is menu display only — the scheduler runs on the capability matrix. |
 | `capability` | staff × service → real minutes | The single source of scheduling truth. Missing cell = never assign. Saves are per-technician replace. |
-| `availability` | capacity ledger, slot finder, booking window | Lanes per 15-min slot per skill group; `CAP_FILL` leaves the walk-in cushion. |
+| `availability` | capacity ledger, slot finder, booking window | Lanes per 15-min slot per skill group; every expected tech is sellable (appointment-only, no reserve). |
 | `bookings` | booking lifecycle, soft-lock expiry, pricing | State machine: PENDING → APPROVED → IN_PROGRESS → COMPLETED / CANCELLED / NO_SHOW. |
 | `slot_locks` | manual time-range closures | Branch-wide (staff NULL) or per-staff; no TTL, deleted by hand. |
 | `schedule` | staff/admin day view, pending work queue | Grid = deposit-secured; revenue aggregate admin-only. |
-| `allocation` | day pins, Step A roster solve, Step B materialize, walk-in engine | The 21:00 nightly close. `staff_day_assignments` unique `(staff_id, day)` is the one-tech-one-salon invariant. |
+| `allocation` | day pins, Step A roster solve, Step B materialize | The 21:00 nightly close. `staff_day_assignments` unique `(staff_id, day)` is the one-tech-one-salon invariant. |
 | `staff` | staff table, personal schedule, start-service | `branch_id` is only a home preference — techs belong to the chain. |
 | `shifts` | `staff_rosters` CRUD | Display-only: the scheduling engine never reads it (days_off + pins + Step A replaced published rosters). |
-| `queue` | walk-in QR tickets | Advisory-locked per-branch daily numbering; never converts to bookings. |
 | `custom_designs` | design requests, quoting, storage | Accept path rides the normal booking pipeline. |
 | `discounts` | discount rules | Only GIFT (threshold → message) has behavior today. |
 | `webhooks` | payment transactions | HMAC-signed, idempotent; the only money entry point. |
@@ -51,13 +50,14 @@ code comments actually live.
 `staff_rosters`; `locations` ← `services` (nullable = global) ←
 `service_extensions`; `bookings` ← `booking_details` (per-service legs,
 `staff_id` nullable until materialize, `staff_requested` marks named legs) ←
-`payment_transactions`; `custom_designs`, `discounts`, `queue_tickets`,
+`payment_transactions`; `custom_designs`, `discounts`,
 `slot_locks`, `allocation_runs`, `audit_logs`. All enums are stored as
 VARCHAR (no native PG enums), timestamps are UTC `timestamptz`, and the
 important invariants are unique constraints: `(staff_id, day)` for day
 pins, `(staff_id, service_id)` for matrix cells,
 `provider_transaction_id` for webhook idempotency. Hot query paths are
-indexed as of migration `8c2e4b9f1a70`.
+indexed as of migration `8c2e4b9f1a70`; the walk-in `queue_tickets` table was
+dropped in `3d7f2c8a9e51` when the shop went appointment-only.
 
 ## Where the "design doc" citations live
 
@@ -69,10 +69,8 @@ repository. Map of the citations to the code that implements them:
 | 1.1 | capacity-ledger service attributes (skill_group, turn_weight, buffer) and rare-service cap | `services/infrastructure/models.py`, `availability/application/capacity.py` |
 | 2.1 | 21:00 D-1 booking freeze; nightly allocation window | `shared/config/settings.py` (`BOOKING_CLOSE_HOUR`), `app/main.py`, `availability/application/capacity.py` |
 | 3.3b | exclusive day pins, first-booking-wins, chain-level techs | `allocation/application/roster.py`, `allocation/infrastructure/assignments.py`, `bookings/application/create.py` |
-| 3.5 | turn fairness, derived (never stored) turn ledger | `allocation/application/materialize.py`, `allocation/application/walkin.py` |
-| 3.6 | walk-in guard band before promised bookings | `allocation/application/walkin.py` (`GUARD_MINUTES`) |
+| 3.5 | turn fairness, derived (never stored) turn ledger | `allocation/application/materialize.py` |
 | 4.3 | allocation runs as an append-only audit; human repair ladder | `allocation/infrastructure/models.py`, `allocation/application/nightly.py` |
 | fix #4 | weekly `max_hours_week` guard at booking time | `bookings/application/create.py` |
 | fix #8 | idempotent nightly run + watchdog rerun | `app/main.py`, `allocation/application/materialize.py` |
-| edge case 7 | rebuild turn ledger from bookings | `allocation/application/walkin.py` (`_today_turns`) |
 | edge case 10 | sick tech frees only any-tech legs | `allocation/application/materialize.py` (`release_staff_assignments`) |

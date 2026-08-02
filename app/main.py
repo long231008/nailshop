@@ -26,7 +26,6 @@ from app.dashboard.presentation.router import router as dashboard_router
 from app.discounts.presentation.routers import router as discounts_router
 from app.me.presentation.routers import router as me_router
 from app.notification.infrastructure.senders import get_notification_sender
-from app.queue.presentation.routers import router as queue_router
 from app.schedule.presentation.routers import router as schedule_router
 from app.services.presentation.routers import router as services_router
 from app.shared.infrastructure.cache.redis_client import redis_client
@@ -164,7 +163,6 @@ app.include_router(allocation_router, prefix="/app")
 app.include_router(me_router, prefix="/app")
 app.include_router(staff_router, prefix="/app")
 app.include_router(custom_designs_router, prefix="/app")
-app.include_router(queue_router, prefix="/app")
 app.include_router(webhooks_router, prefix="/app")
 app.include_router(admin_router, prefix="/app")
 app.include_router(audit_log_router, prefix="/app")

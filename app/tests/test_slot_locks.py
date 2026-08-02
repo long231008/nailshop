@@ -15,7 +15,7 @@ def _lock_payload(seeded_staff, seeded_shift, staff_specific=False, hours=2):
         "branch_id": str(seeded_staff["branch_id"]),
         "start_time": start.isoformat(),
         "end_time": (start + timedelta(hours=hours)).isoformat(),
-        "reason": "Fully booked with walk-ins",
+        "reason": "Closed for deep cleaning",
     }
     if staff_specific:
         payload["staff_id"] = str(seeded_staff["staff_id"])

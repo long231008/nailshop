@@ -7,8 +7,7 @@ Technicians belong to the chain. Three layers decide their branch for a day:
 2. AUTO - Step A of the nightly allocation placed them (greedy solver below).
 3. Neither yet (open future days) - the *expected* plan used by the capacity
    ledger: home branch if set, otherwise the homeless pool is spread evenly
-   across branches. CAP_FILL's cushion absorbs the guesswork; Step A trues it
-   up the evening before.
+   across branches. Step A trues the guesswork up the evening before.
 """
 
 from datetime import date as date_type

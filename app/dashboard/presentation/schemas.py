@@ -15,7 +15,6 @@ class BookingStatusCountsResponse(BaseModel):
 class DashboardSummaryResponse(BaseModel):
     date: date
     bookings_today: BookingStatusCountsResponse
-    queue_waiting_count: int
     pending_custom_designs: int
     active_staff_count: int
 
