@@ -73,6 +73,6 @@ repository. Map of the citations to the code that implements them:
 | 3.3b (softened) | chain-level techs; a named tech is a note granted by managers, never by the allocator | `allocation/application/reassign.py`, `allocation/application/materialize.py`, `bookings/application/create.py` |
 | 3.5 | turn fairness, derived (never stored) turn ledger | `allocation/application/materialize.py` |
 | 4.3 | allocation runs as an append-only audit; human repair ladder | `allocation/infrastructure/models.py`, `allocation/application/nightly.py` |
-| fix #4 | weekly `max_hours_week` per technician | stored and editable (`capability/presentation/routers.py`) but **not enforced anywhere** since booking stopped reserving a named technician |
+| fix #4 | weekly `max_hours_week` per technician | enforced where assignment happens: the allocator's candidate filter and manual reassign (`allocation/application/materialize.py`, `reassign.py`) |
 | fix #8 | idempotent nightly run + watchdog rerun | `app/main.py`, `allocation/application/materialize.py` |
-| edge case 10 | sick tech frees only any-tech legs | `allocation/application/materialize.py` (`release_staff_assignments`) |
+| edge case 10 | a sick tech's legs are all releasable (named techs are notes, not promises) | `allocation/application/materialize.py` (`release_staff_assignments`) |
