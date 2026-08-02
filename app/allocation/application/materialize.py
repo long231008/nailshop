@@ -77,7 +77,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         {"key": f"allocation:{branch_id}:{target_date.isoformat()}"},
     )
 
-    # The techs standing at this branch that day, per the roster (pins + Step A).
+    # The techs standing at this branch that day, per the roster (Step A).
     staff_list = expected_staff(db, branch_id, target_date)
     matrix = load_matrix(db)
     configured = matrix_configured_for(staff_list, matrix)

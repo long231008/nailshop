@@ -27,7 +27,7 @@ class StaffModel(Base):
     )
     # Technicians belong to the CHAIN, not to one salon. This is only the home
     # branch *preference* (may be empty): each day's actual branch is decided by
-    # customer pins and the nightly Step A allocation (staff_day_assignments).
+    # the nightly Step A allocation (staff_day_assignments).
     branch_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("locations.id"), nullable=True
     )

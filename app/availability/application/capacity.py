@@ -119,8 +119,8 @@ def planning_minutes(db: Session, branch_id: UUID, service_id: UUID, day: date_t
 
 
 def expected_group_counts(db: Session, branch_id: UUID, day: date_type) -> dict[str, int]:
-    """Expected techs per skill group on `day`, from the staffing plan (pins +
-    Step A assignments + home/pool expectations - see roster.expected_staff)."""
+    """Expected techs per skill group on `day`, from the staffing plan (Step A
+    assignments + home/pool expectations - see roster.expected_staff)."""
     services = {s.id: s for s in db.query(ServiceModel).all()}
     matrix = load_matrix(db)
     counts: dict[str, int] = {}

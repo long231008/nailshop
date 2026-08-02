@@ -29,7 +29,7 @@ def create_staff(
     email: str | None,
 ) -> StaffModel:
     # Technicians belong to the chain; the branch is only their optional home
-    # preference - each day's salon is decided by pins and the nightly Step A.
+    # preference - each day's salon is decided by the nightly Step A.
     if branch_id is not None and db.get(LocationModel, branch_id) is None:
         raise BranchNotFoundError()
 

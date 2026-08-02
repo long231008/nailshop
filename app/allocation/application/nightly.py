@@ -23,8 +23,8 @@ def run_nightly_allocation(db: Session) -> list[AllocationRunModel]:
         logger.info("Nightly allocation: %s is a closed day, nothing to assign", target_date)
         return []
 
-    # Step A: place every technician at a branch for tomorrow (pins fixed,
-    # demand-driven greedy for the rest - doc 4.2/4.4).
+    # Step A: place every technician at a branch for tomorrow
+    # (demand-driven greedy - doc 4.2/4.4).
     assignments = solve_day(db, target_date)
     logger.info(
         "Step A placed %d technicians for %s", len(assignments), target_date

@@ -223,7 +223,7 @@ def test_capacity_blocks_overselling_one_tech_branch(
     _cleanup_capabilities(db_session, [seeded_staff["staff_id"]])
 
 
-# --- Chain staff: exclusive pins + Step A ------------------------------------
+# --- Chain staff: Step A placement ------------------------------------
 
 
 def test_step_a_places_every_available_tech(

@@ -55,7 +55,7 @@ class SqlAlchemyDashboardRepository(DashboardRepository):
             )
         else:
             # Techs belong to the chain: today's headcount at a branch follows
-            # the day roster (pins + Step A), falling back to home preference.
+            # the day roster (Step A), falling back to home preference.
             from app.allocation.application.roster import expected_staff
 
             active_staff_count = len(expected_staff(self._db, branch_id, today))
