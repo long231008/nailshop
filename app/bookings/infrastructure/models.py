@@ -86,9 +86,9 @@ class BookingDetailModel(Base):
     staff_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("staff.id"), nullable=True
     )
-    # The technician the CUSTOMER asked for (doc 3.3b, softened): a preference,
-    # not a promise - the nightly allocation seats this tech first when their
-    # timeline allows, and quietly picks another when it does not.
+    # The technician the CUSTOMER asked for (doc 3.3b, softened): a note for
+    # the salon. The allocator ignores it; managers see it on
+    # /allocation/status and grant it by hand when the schedule allows.
     preferred_staff_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("staff.id"), nullable=True
     )

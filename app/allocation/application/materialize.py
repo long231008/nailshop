@@ -7,9 +7,10 @@ assigned tech's real minutes, so timelines reflect when techs actually finish.
 
 Fairness follows the salon turn system (doc 3.5): every assignment adds the
 service's turn weight to the tech's ledger, and the next leg goes to whoever
-holds the fewest turns - except that a customer's preferred technician
-(preferred_staff_id, a wish recorded at booking time) is seated first whenever
-their timeline allows.
+holds the fewest turns. A customer's preferred technician (preferred_staff_id)
+is deliberately NOT an input here - the allocator stays free to optimise; the
+wish is surfaced on /allocation/status for a manager to grant by hand via
+/allocation/reassign when the finished schedule allows it.
 """
 
 from datetime import date as date_type
@@ -150,8 +151,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         staff, real_end, hold_end = min(
             candidates,
             key=lambda entry: (
-                entry[0].id != detail.preferred_staff_id,  # the customer's wish first
-                turns[entry[0].id],  # then fairness (doc 3.5)
+                turns[entry[0].id],  # fairness first (doc 3.5)
                 entry[0].id not in booking_staff,  # continuity within the visit
                 entry[0].id not in affinity,  # the customer's usual tech
                 last_finish.get(entry[0].id, day_start),  # longest idle wins ties

@@ -17,7 +17,7 @@ code comments actually live.
 | `bookings` | booking lifecycle, soft-lock expiry, pricing | State machine: PENDING → APPROVED → IN_PROGRESS → COMPLETED / CANCELLED / NO_SHOW. |
 | `slot_locks` | manual time-range closures | Branch-wide (staff NULL) or per-staff; no TTL, deleted by hand. |
 | `schedule` | staff/admin day view, pending work queue | Grid = deposit-secured; revenue aggregate admin-only. |
-| `allocation` | Step A roster solve, Step B materialize | The 21:00 nightly close. `staff_day_assignments` unique `(staff_id, day)` keeps one tech at one salon per day; customer wishes are just `preferred_staff_id` on legs. |
+| `allocation` | Step A roster solve, Step B materialize, manual reassign | The 21:00 nightly close. `staff_day_assignments` unique `(staff_id, day)` keeps one tech at one salon per day; customer wishes (`preferred_staff_id`) are ignored by the allocator and granted by managers via `/allocation/reassign`. |
 | `staff` | staff table, personal schedule, start-service | `branch_id` is only a home preference — techs belong to the chain. |
 | `shifts` | `staff_rosters` CRUD | Display-only: the scheduling engine never reads it (days_off + Step A replaced published rosters). |
 | `custom_designs` | design requests, quoting, storage | Accept path rides the normal booking pipeline. |
@@ -70,7 +70,7 @@ repository. Map of the citations to the code that implements them:
 |---|---|---|
 | 1.1 | capacity-ledger service attributes (skill_group, turn_weight, buffer) and rare-service cap | `services/infrastructure/models.py`, `availability/application/capacity.py` |
 | 2.1 | 21:00 D-1 booking freeze; nightly allocation window | `shared/config/settings.py` (`BOOKING_CLOSE_HOUR`), `app/main.py`, `availability/application/capacity.py` |
-| 3.3b (softened) | chain-level techs; a named tech is a preference honoured at allocation | `allocation/application/roster.py`, `allocation/application/materialize.py`, `bookings/application/create.py` |
+| 3.3b (softened) | chain-level techs; a named tech is a note granted by managers, never by the allocator | `allocation/application/reassign.py`, `allocation/application/materialize.py`, `bookings/application/create.py` |
 | 3.5 | turn fairness, derived (never stored) turn ledger | `allocation/application/materialize.py` |
 | 4.3 | allocation runs as an append-only audit; human repair ladder | `allocation/infrastructure/models.py`, `allocation/application/nightly.py` |
 | fix #4 | weekly `max_hours_week` guard at booking time | `bookings/application/create.py` |

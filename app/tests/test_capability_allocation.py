@@ -264,8 +264,9 @@ def test_step_a_places_every_available_tech(
         db_session.commit()
 
 
-def test_materialize_honours_preferred_technician(
+def test_preference_is_ignored_by_allocator_and_granted_by_hand(
     client,
+    admin_headers,
     customer_headers,
     other_customer_headers,
     db_session,
@@ -276,8 +277,9 @@ def test_materialize_honours_preferred_technician(
     seeded_shift,
     cleanup_records,
 ):
-    """The customer's wish beats turn fairness: the busier preferred tech still
-    gets the leg when their timeline allows."""
+    """The allocator optimises freely (fairness wins, the wish is ignored);
+    the wish shows up on /allocation/status and a manager grants it by hand
+    via /allocation/reassign."""
     from app.allocation.application.materialize import materialize_day
     from app.shared.infrastructure.clock import shop_timezone
 
@@ -314,18 +316,66 @@ def test_materialize_honours_preferred_technician(
     )
     assert second.status_code == 201, second.text
     cleanup_records.append(("bookings", second.json()["id"]))
-    cleanup_records.append(("booking_details", second.json()["details"][0]["id"]))
+    detail_id = second.json()["details"][0]["id"]
+    cleanup_records.append(("booking_details", detail_id))
 
     day = seeded_shift["start"].astimezone(shop_timezone()).date()
     run = materialize_day(db_session, seeded_branch, day)
     cleanup_records.append(("allocation_runs", run.id))
     assert run.unassigned_count == 0
 
-    detail = db_session.get(BookingDetailModel, uuid.UUID(second.json()["details"][0]["id"]))
+    # Fairness wins: the wished (busier) tech does NOT get the leg.
+    detail = db_session.get(BookingDetailModel, uuid.UUID(detail_id))
     db_session.refresh(detail)
-    # Fairness alone would send this leg to the idle second tech; the recorded
-    # preference wins instead.
+    assert detail.staff_id == second_staff.id
+
+    # The wish is surfaced for a human next to the machine's decision.
+    status_body = client.get(
+        "/app/allocation/status",
+        params={"target_date": day.isoformat(), "branch_id": str(seeded_branch)},
+        headers=admin_headers,
+    ).json()
+    entry = next(
+        p for p in status_body["preferences"] if p["booking_detail_id"] == detail_id
+    )
+    assert entry["preferred_staff_id"] == str(seeded_staff["staff_id"])
+    assert entry["assigned_staff_id"] == str(second_staff.id)
+    assert entry["honoured"] is False
+
+    # The manager grants the wish by hand; the leg moves and is audited.
+    reassign = client.post(
+        "/app/allocation/reassign",
+        json={"booking_detail_id": detail_id, "staff_id": str(seeded_staff["staff_id"])},
+        headers=admin_headers,
+    )
+    assert reassign.status_code == 200, reassign.text
+    db_session.refresh(detail)
     assert detail.staff_id == seeded_staff["staff_id"]
+
+    from app.audit_log.infrastructure.models import AuditLogModel
+
+    log_entry = (
+        db_session.query(AuditLogModel)
+        .filter(
+            AuditLogModel.action == "allocation.reassigned",
+            AuditLogModel.entity_id == uuid.UUID(second.json()["id"]),
+        )
+        .first()
+    )
+    cleanup_records.append(("audit_logs", log_entry.id))
+    assert log_entry.details["to_staff_id"] == str(seeded_staff["staff_id"])
+
+    # The tool is general, not wish-only: the manager can also move the other
+    # leg onto the now-idle tech to rebalance the day.
+    rebalance = client.post(
+        "/app/allocation/reassign",
+        json={
+            "booking_detail_id": first.json()["details"][0]["id"],
+            "staff_id": str(second_staff.id),
+        },
+        headers=admin_headers,
+    )
+    assert rebalance.status_code == 200, rebalance.text
 
 
 def test_matrix_save_replaces_only_staff_in_payload(

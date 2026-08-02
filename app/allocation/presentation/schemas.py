@@ -16,8 +16,8 @@ class AllocationRunResponse(BaseModel):
 class AllocationRunRequest(BaseModel):
     target_date: date
     branch_id: UUID | None = None
-    # A tech who called in sick: their system-assigned legs are released first,
-    # then the day is re-materialized. Customer-requested legs stay put.
+    # A tech who called in sick: all their legs are released first, then the
+    # day is re-materialized.
     release_staff_id: UUID | None = None
 
 
@@ -33,14 +33,44 @@ class RosterEntry(BaseModel):
     staff_name: str
     branch_id: UUID
     branch_name: str
-    # "pin" = a customer booked this tech by name (untouchable);
     # "auto" = placed by Step A of the nightly allocation.
     source: str
 
 
+class PreferenceEntry(BaseModel):
+    """A customer's tech wish next to what the allocator actually did, so a
+    manager can grant it by hand (POST /allocation/reassign) when possible."""
+
+    booking_id: UUID
+    booking_detail_id: UUID
+    service_name: str
+    start_time: datetime
+    end_time: datetime
+    preferred_staff_id: UUID
+    preferred_staff_name: str
+    assigned_staff_id: UUID | None
+    assigned_staff_name: str | None
+    honoured: bool
+
+
 class AllocationStatusResponse(BaseModel):
     runs: list[AllocationRunResponse]
-    # Who works where on that day (empty until pins exist or Step A has run).
+    # Who works where on that day (empty until Step A has run).
     roster: list[RosterEntry]
     unassigned: list[UnassignedLeg]
+    preferences: list[PreferenceEntry]
+
+
+class ReassignRequest(BaseModel):
+    booking_detail_id: UUID
+    staff_id: UUID
+
+
+class ReassignResponse(BaseModel):
+    booking_detail_id: UUID
+    booking_id: UUID
+    staff_id: UUID
+    staff_name: str
+    start_time: datetime
+    end_time: datetime
 

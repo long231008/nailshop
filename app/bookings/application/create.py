@@ -3,8 +3,9 @@
 The customer commits to *salon + time + services + price*. Every item keeps
 staff_id NULL and holds the cautious planning duration; the nightly allocation
 names the technician and shrinks each leg to that tech's real minutes. Naming
-a technician records a *preference* the allocation honours first when that
-tech's timeline allows - a wish, never a promise.
+a technician records a *note for the salon*: the allocator ignores it and
+stays free to optimise, and a manager grants the wish by hand afterwards
+when the finished schedule allows (/allocation/reassign).
 """
 
 import logging
@@ -148,10 +149,10 @@ def create_booking(
 
         preferred_staff_id = None
         if item.staff_id is not None:
-            # Preferred technician (doc 3.3b, softened): a wish, not a promise.
-            # The visit is still sold as any-tech capacity; the nightly
-            # allocation seats this tech first whenever their timeline allows.
-            # Only wishes that can possibly come true are accepted.
+            # Preferred technician (doc 3.3b, softened): a note for the salon,
+            # never an input to the allocator. Only wishes that can possibly
+            # come true are accepted, so the manager reviewing them later is
+            # not chasing the impossible.
             staff = (
                 db.query(StaffModel)
                 .filter(
