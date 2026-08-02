@@ -43,9 +43,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Browsers ignore HSTS on plain HTTP, so this is safe in local dev and
         # takes effect the moment the API is served over TLS.
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        # This API serves JSON and uploaded images - never HTML - so lock the
-        # document down entirely.
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; img-src 'self' data:; frame-ancestors 'none'"
-        )
+        # The API itself serves JSON and uploaded images, so the document is
+        # locked down entirely - except the two interactive doc pages, whose
+        # HTML loads Swagger/ReDoc assets from jsdelivr.
+        if request.url.path in ("/docs", "/redoc"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "img-src 'self' data: https://fastapi.tiangolo.com; "
+                "font-src https://cdn.jsdelivr.net; "
+                "connect-src 'self'; frame-ancestors 'none'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; img-src 'self' data:; frame-ancestors 'none'"
+            )
         return response

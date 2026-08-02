@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -72,8 +72,9 @@ class Settings(BaseSettings):
     TRUST_PROXY_HEADERS: bool = False
     SQL_ECHO: bool = False
 
-    class Config:
-        env_file = ".env"
+    # extra="ignore": an unrecognised key in .env must not stop the app from
+    # booting - people park notes and tool variables in that file.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

@@ -69,6 +69,7 @@ class BookingDetailModel(Base):
     __table_args__ = (
         Index("ix_booking_details_booking_id", "booking_id"),
         Index("ix_booking_details_staff_start", "staff_id", "start_time"),
+        Index("ix_booking_details_preferred_staff", "preferred_staff_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

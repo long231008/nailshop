@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,7 +17,10 @@ class StaffCapabilityModel(Base):
     """
 
     __tablename__ = "staff_capabilities"
-    __table_args__ = (UniqueConstraint("staff_id", "service_id", name="uq_capability_cell"),)
+    __table_args__ = (
+        UniqueConstraint("staff_id", "service_id", name="uq_capability_cell"),
+        Index("ix_staff_capabilities_service", "service_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4

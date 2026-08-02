@@ -13,6 +13,10 @@ spec:
       labels:
         app: nailshop-api
     spec:
+      # The image runs as a non-root system user; fsGroup makes the uploads
+      # volume group-writable for it (a fresh PVC mounts root-owned otherwise).
+      securityContext:
+        fsGroup: 2000
       containers:
         - name: nailshop-api
           image: nailshop-api:local

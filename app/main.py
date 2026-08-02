@@ -131,8 +131,14 @@ app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
+# add_middleware() prepends, so runtime order is the reverse of this list:
+# RequestLogging -> CORS -> SlowAPI -> SecurityHeaders -> TrustedHost -> app.
+# CORS must sit OUTSIDE SlowAPI so a middleware-produced 429 still carries
+# CORS headers (a browser cannot read the error otherwise) and preflight
+# OPTIONS requests do not consume rate-limit budget.
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins_list,
@@ -140,7 +146,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 
