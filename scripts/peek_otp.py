@@ -44,7 +44,7 @@ def main() -> None:
     cooldown = r.ttl(f"otp:cooldown:{user_id}")
 
     if code is None:
-        print("No pending OTP -- request one via /app/auth/login first")
+        print("No pending OTP -- request one via /app/auth/request-otp first")
         if cooldown > 0:
             print(f"(resend cooldown active: {cooldown}s)")
         sys.exit(1)
