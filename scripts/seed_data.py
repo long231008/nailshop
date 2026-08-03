@@ -267,6 +267,14 @@ def _get_or_create_admin(db) -> UserModel:
         admin = UserModel(phone_number=ADMIN_PHONE, status=UserStatus.ACTIVE, role=UserRole.ADMIN)
         db.add(admin)
         db.flush()
+    elif admin.role != UserRole.ADMIN or admin.status != UserStatus.ACTIVE:
+        # The phone may already exist as a PENDING customer if it signed in via
+        # OTP before the seed ever ran (request-otp creates every new number as a
+        # customer). Promote it so re-running the seed always repairs the admin
+        # account instead of silently leaving it without dashboard access.
+        admin.role = UserRole.ADMIN
+        admin.status = UserStatus.ACTIVE
+        db.flush()
     return admin
 
 
