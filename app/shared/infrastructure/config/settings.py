@@ -13,14 +13,16 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str
     # Where this API is reachable from the browser (used for locally stored images).
-    BACKEND_PUBLIC_URL: str = "http://localhost:8000"
+    # Local development serves on 8001; the container still listens on 8000 and
+    # production sets these to the real domain, so the port here is dev-only.
+    BACKEND_PUBLIC_URL: str = "http://localhost:8001"
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str
-    GOOGLE_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/google/callback"
+    GOOGLE_OAUTH_REDIRECT_URI: str = "http://localhost:8001/app/auth/google/callback"
     # Optional - Facebook login stays disabled until both are set.
     FACEBOOK_APP_ID: str = ""
     FACEBOOK_APP_SECRET: str = ""
-    FACEBOOK_OAUTH_REDIRECT_URI: str = "http://localhost:8000/app/auth/facebook/callback"
+    FACEBOOK_OAUTH_REDIRECT_URI: str = "http://localhost:8001/app/auth/facebook/callback"
     FRONTEND_URL: str = "http://localhost:5173"
     # Which websites may call this API from a browser, and which Host headers
     # this API answers to. Defaults cover local development only - production
