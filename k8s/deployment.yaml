@@ -22,7 +22,7 @@ spec:
           image: nailshop-api:local
           imagePullPolicy: Never
           ports:
-            - containerPort: 8000
+            - containerPort: 8001
           envFrom:
             - configMapRef:
                 name: nailshop-config
@@ -37,7 +37,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 8001
               httpHeaders:
                 - name: Host
                   value: api.nailzinc.co.uk
@@ -46,7 +46,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 8001
               httpHeaders:
                 - name: Host
                   value: api.nailzinc.co.uk
@@ -55,7 +55,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8000
+              port: 8001
               httpHeaders:
                 - name: Host
                   value: api.nailzinc.co.uk

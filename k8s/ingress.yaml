@@ -32,4 +32,4 @@ spec:
               service:
                 name: nailshop-api
                 port:
-                  number: 8000
+                  number: 8001

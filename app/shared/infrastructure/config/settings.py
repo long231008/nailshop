@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str
     # Where this API is reachable from the browser (used for locally stored images).
-    # Local development serves on 8001; the container still listens on 8000 and
-    # production sets these to the real domain, so the port here is dev-only.
+    # The API serves on 8001 everywhere - locally, in the container and behind
+    # the ingress. Production overrides this with its real domain.
     BACKEND_PUBLIC_URL: str = "http://localhost:8001"
     GOOGLE_OAUTH_CLIENT_ID: str
     GOOGLE_OAUTH_CLIENT_SECRET: str
