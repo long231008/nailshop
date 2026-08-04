@@ -58,6 +58,7 @@ def build_visit_legs(
             {
                 "service_id": service.id,
                 "skill_group": service.skill_group,
+                "resource": service.resource,
                 "offset_min": offset,
                 "duration_min": minutes,
                 "buffer_min": service.buffer_after_min,
@@ -76,6 +77,7 @@ def place_legs(legs: list[dict], visit_start) -> list[dict]:
             {
                 "service_id": leg["service_id"],
                 "skill_group": leg["skill_group"],
+                "resource": leg.get("resource"),
                 "start": start,
                 "end": end + timedelta(minutes=leg["buffer_min"]),
                 "service_end": end,

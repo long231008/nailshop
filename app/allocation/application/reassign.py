@@ -25,6 +25,7 @@ from app.bookings.infrastructure.models import (
     BookingStatus,
 )
 from app.capability.application.matrix import ceil_to_grid, is_available, load_matrix
+from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import shop_timezone
 from app.slot_locks.application.locks import locks_overlapping
@@ -115,6 +116,8 @@ def reassign_leg(
     for lock in locks_overlapping(db, booking.branch_id, detail.start_time, hold_end):
         if lock.staff_id is None or lock.staff_id == staff.id:
             busy.append((lock.start_time, lock.end_time))
+    # A leave window blocks the target tech just like a booking would.
+    busy.extend(leaves_for_day(db, [staff.id], day).get(staff.id, []))
     if any(b_start < hold_end and b_end > detail.start_time for b_start, b_end in busy):
         raise ReassignConflictError()
 

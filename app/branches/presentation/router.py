@@ -20,6 +20,30 @@ from app.shared.presentation.dependencies import require_roles
 router = APIRouter(prefix="/branches", tags=["branches"])
 
 
+def _branch_response(branch: LocationModel, services: list[BranchServiceSummary]) -> BranchResponse:
+    return BranchResponse(
+        id=branch.id,
+        name=branch.name,
+        address=branch.address,
+        phone_number=branch.phone_number,
+        pedicure_chairs=branch.pedicure_chairs,
+        manicure_tables=branch.manicure_tables,
+        massage_beds=branch.massage_beds,
+        services=services,
+    )
+
+
+def _summarise(service: ServiceModel) -> BranchServiceSummary:
+    return BranchServiceSummary(
+        id=service.id,
+        name=service.name,
+        category=service.category,
+        description=service.description,
+        duration_min=service.duration_min,
+        base_price=float(service.base_price),
+    )
+
+
 @router.post("", response_model=BranchResponse, status_code=status.HTTP_201_CREATED)
 def create_branch(
     payload: BranchCreateRequest,
@@ -27,19 +51,18 @@ def create_branch(
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> BranchResponse:
     branch = LocationModel(
-        name=payload.name, address=payload.address, phone_number=payload.phone_number
+        name=payload.name,
+        address=payload.address,
+        phone_number=payload.phone_number,
+        pedicure_chairs=payload.pedicure_chairs,
+        manicure_tables=payload.manicure_tables,
+        massage_beds=payload.massage_beds,
     )
     db.add(branch)
     db.commit()
     db.refresh(branch)
 
-    return BranchResponse(
-        id=branch.id,
-        name=branch.name,
-        address=branch.address,
-        phone_number=branch.phone_number,
-        services=[],
-    )
+    return _branch_response(branch, [])
 
 
 @router.get("", response_model=list[BranchResponse])
@@ -50,27 +73,14 @@ def list_branches(db: Session = Depends(get_db)) -> list[BranchResponse]:
     services_by_branch: dict = defaultdict(list)
     global_services = []
     for service in services:
-        summary = BranchServiceSummary(
-            id=service.id,
-            name=service.name,
-            category=service.category,
-            description=service.description,
-            duration_min=service.duration_min,
-            base_price=float(service.base_price),
-        )
+        summary = _summarise(service)
         if service.branch_id is None:
             global_services.append(summary)
         else:
             services_by_branch[service.branch_id].append(summary)
 
     return [
-        BranchResponse(
-            id=branch.id,
-            name=branch.name,
-            address=branch.address,
-            phone_number=branch.phone_number,
-            services=services_by_branch.get(branch.id, []) + global_services,
-        )
+        _branch_response(branch, services_by_branch.get(branch.id, []) + global_services)
         for branch in branches
     ]
 
@@ -87,23 +97,7 @@ def get_branch(branch_id: UUID, db: Session = Depends(get_db)) -> BranchResponse
         .all()
     )
 
-    return BranchResponse(
-        id=branch.id,
-        name=branch.name,
-        address=branch.address,
-        phone_number=branch.phone_number,
-        services=[
-            BranchServiceSummary(
-                id=s.id,
-                name=s.name,
-                category=s.category,
-                description=s.description,
-                duration_min=s.duration_min,
-                base_price=float(s.base_price),
-            )
-            for s in services
-        ],
-    )
+    return _branch_response(branch, [_summarise(s) for s in services])
 
 
 @router.patch("/{branch_id}", response_model=BranchResponse)
@@ -129,20 +123,4 @@ def update_branch(
         .all()
     )
 
-    return BranchResponse(
-        id=branch.id,
-        name=branch.name,
-        address=branch.address,
-        phone_number=branch.phone_number,
-        services=[
-            BranchServiceSummary(
-                id=s.id,
-                name=s.name,
-                category=s.category,
-                description=s.description,
-                duration_min=s.duration_min,
-                base_price=float(s.base_price),
-            )
-            for s in services
-        ],
-    )
+    return _branch_response(branch, [_summarise(s) for s in services])

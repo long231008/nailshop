@@ -19,7 +19,9 @@ from sqlalchemy.orm import Session
 
 from app.allocation.application.roster import expected_staff
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
+from app.branches.infrastructure.models import LocationModel
 from app.capability.application.matrix import ceil_to_grid, load_matrix
+from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import (
     is_closed_day,
@@ -31,6 +33,27 @@ from app.shared.infrastructure.config.settings import settings
 from app.staff.infrastructure.models import StaffModel
 
 GRID_MINUTES = 15
+
+# A service claims one physical spot through its `resource` field; the branch
+# holds a fixed count of each. A count of 0 means "not tracked" (unlimited), so
+# only positive caps ever constrain a booking.
+RESOURCE_CAP_FIELD = {
+    "PEDI_CHAIR": "pedicure_chairs",
+    "TABLE": "manicure_tables",
+    "MASSAGE_BED": "massage_beds",
+}
+
+
+def branch_resource_caps(branch: LocationModel) -> dict[str, int]:
+    """resource -> concurrent cap for one branch, keeping only tracked (positive)
+    resources so a fresh branch (all zeros) behaves exactly as before."""
+    caps: dict[str, int] = {}
+    for resource, field in RESOURCE_CAP_FIELD.items():
+        value = getattr(branch, field, 0) or 0
+        if value > 0:
+            caps[resource] = value
+    return caps
+
 
 ACTIVE_BOOKING_STATUSES = [
     BookingStatus.PENDING,
@@ -118,26 +141,6 @@ def planning_minutes(db: Session, branch_id: UUID, service_id: UUID, day: date_t
     return ceil_to_grid(max(minutes)) if minutes else None
 
 
-def expected_group_counts(db: Session, branch_id: UUID, day: date_type) -> dict[str, int]:
-    """Expected techs per skill group on `day`, from the staffing plan (Step A
-    assignments + home/pool expectations - see roster.expected_staff)."""
-    services = {s.id: s for s in db.query(ServiceModel).all()}
-    matrix = load_matrix(db)
-    counts: dict[str, int] = {}
-    for staff in expected_staff(db, branch_id, day):
-        group = _primary_group(matrix.get(staff.id, {}), services)
-        if group is not None:
-            counts[group] = counts.get(group, 0) + 1
-    return counts
-
-
-def lanes_for(expected_techs: int) -> int:
-    """Every expected tech is sellable: the shop is appointment-only, so no
-    lane is held back for walk-ins. Sick-day surprises are handled after the
-    fact by the repair flow (release + re-run), not by underselling."""
-    return max(0, expected_techs)
-
-
 def _slots_covered(start: datetime, end: datetime) -> list[datetime]:
     """The 15' slots a leg overlaps, keyed by slot start (UTC)."""
     grid = timedelta(minutes=GRID_MINUTES)
@@ -174,6 +177,7 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
         {
             "service_id": service.id,
             "skill_group": service.skill_group,
+            "resource": service.resource,
             "start": detail.start_time,
             "end": detail.end_time + timedelta(minutes=service.buffer_after_min),
         }
@@ -182,46 +186,115 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
 
 
 class CapacityLedger:
-    """Snapshot of one (branch, day): lane caps and lanes already sold."""
+    """Snapshot of one (branch, day): lane caps and lanes already sold.
+
+    Three limits stack on every 15-minute slot:
+    - the skill-group lane cap (expected techs of that group), shrunk in any slot
+      a counted tech is on leave;
+    - a rare-service cap (a speciality only some techs can do);
+    - a physical-resource cap (pedicure chairs / tables / massage beds).
+    """
 
     def __init__(self, db: Session, branch_id: UUID, day: date_type):
         self.day = day
         staff_list = expected_staff(db, branch_id, day)
         matrix = load_matrix(db)
-        if matrix_configured_for(staff_list, matrix):
-            group_counts = expected_group_counts(db, branch_id, day)
-            self.lane_caps = {group: lanes_for(count) for group, count in group_counts.items()}
-            self.default_cap = 0
-        else:
-            # Legacy mode (matrix not filled in yet): one pooled lane cap over
-            # every tech expected in, whatever the skill group.
-            self.lane_caps = {}
-            self.default_cap = lanes_for(len(staff_list))
+        services = {s.id: s for s in db.query(ServiceModel).all()}
+        leave_windows = leaves_for_day(db, [staff.id for staff in staff_list], day)
+
+        # Per-slot lane cap = the group's expected head count minus the techs of
+        # that group whose leave covers the slot. Legacy mode (no matrix yet)
+        # keeps one pooled cap over every expected tech.
+        self.configured = matrix_configured_for(staff_list, matrix)
+        self.base_caps: dict[str, int] = {}
+        self.group_leaves: dict[str, list[tuple]] = {}
+        self.base_default = 0
+        self.default_leaves: list[tuple] = []
+        for staff in staff_list:
+            windows = leave_windows.get(staff.id, [])
+            if self.configured:
+                group = _primary_group(matrix.get(staff.id, {}), services)
+                if group is None:
+                    continue
+                self.base_caps[group] = self.base_caps.get(group, 0) + 1
+                if windows:
+                    self.group_leaves.setdefault(group, []).extend(windows)
+            else:
+                self.base_default += 1
+                self.default_leaves.extend(windows)
+
+        branch = db.get(LocationModel, branch_id)
+        self.resource_caps = branch_resource_caps(branch) if branch is not None else {}
+
         self.used: dict[tuple[str, datetime], int] = {}
         self.used_per_service: dict[tuple[UUID, datetime], int] = {}
+        self.used_per_resource: dict[tuple[str, datetime], int] = {}
         for leg in existing_legs(db, branch_id, day):
             self._count(leg)
 
+    def _group_cap(self, group: str, slot: datetime) -> int:
+        """Sellable lanes of a group in one 15-minute slot, after leave."""
+        slot_end = slot + timedelta(minutes=GRID_MINUTES)
+        if self.configured:
+            base = self.base_caps.get(group, 0)
+            windows = self.group_leaves.get(group, ())
+        else:
+            base = self.base_default
+            windows = self.default_leaves
+        on_leave = sum(1 for w_start, w_end in windows if w_start < slot_end and w_end > slot)
+        return max(0, base - on_leave)
+
+    def _resource_of(self, leg: dict) -> str | None:
+        """The tracked physical resource a leg needs, or None when its resource
+        is untracked at this branch (cap 0) or unset."""
+        resource = leg.get("resource")
+        return resource if resource in self.resource_caps else None
+
     def _count(self, leg: dict) -> None:
+        resource = self._resource_of(leg)
         for slot in _slots_covered(leg["start"], leg["end"]):
             key = (leg["skill_group"], slot)
             self.used[key] = self.used.get(key, 0) + 1
             skey = (leg["service_id"], slot)
             self.used_per_service[skey] = self.used_per_service.get(skey, 0) + 1
+            if resource is not None:
+                rkey = (resource, slot)
+                self.used_per_resource[rkey] = self.used_per_resource.get(rkey, 0) + 1
+
+    def resource_fits(self, legs: list[dict]) -> bool:
+        """Physical-resource check only (pedicure chairs / tables / beds), for the
+        desk adding an appointment to a named technician: the group-lane cap is a
+        nightly-allocation abstraction and does not apply once a free tech is
+        chosen, but a chair or bed is still a hard limit."""
+        pending_resource: dict[tuple[str, datetime], int] = {}
+        for leg in legs:
+            resource = self._resource_of(leg)
+            if resource is None:
+                continue
+            for slot in _slots_covered(leg["start"], leg["end"]):
+                rkey = (resource, slot)
+                pending_resource[rkey] = pending_resource.get(rkey, 0) + 1
+                if (
+                    self.used_per_resource.get(rkey, 0) + pending_resource[rkey]
+                    > self.resource_caps[resource]
+                ):
+                    return False
+        return True
 
     def fits(self, legs: list[dict], service_lane_caps: dict[UUID, int]) -> bool:
-        """Would these new legs stay under every lane cap? Legs of the same
-        proposal are counted against each other too (parallel steps use 2 lanes).
+        """Would these new legs stay under every cap? Legs of the same proposal
+        are counted against each other too (parallel steps use 2 lanes).
         service_lane_caps: rare-service guard, floor/at-least-1 of eligible techs.
         """
         pending: dict[tuple[str, datetime], int] = {}
         pending_service: dict[tuple[UUID, datetime], int] = {}
+        pending_resource: dict[tuple[str, datetime], int] = {}
         for leg in legs:
+            resource = self._resource_of(leg)
             for slot in _slots_covered(leg["start"], leg["end"]):
                 key = (leg["skill_group"], slot)
                 pending[key] = pending.get(key, 0) + 1
-                cap = self.lane_caps.get(leg["skill_group"], self.default_cap)
-                if self.used.get(key, 0) + pending[key] > cap:
+                if self.used.get(key, 0) + pending[key] > self._group_cap(leg["skill_group"], slot):
                     return False
                 skey = (leg["service_id"], slot)
                 pending_service[skey] = pending_service.get(skey, 0) + 1
@@ -231,6 +304,14 @@ class CapacityLedger:
                     and self.used_per_service.get(skey, 0) + pending_service[skey] > service_cap
                 ):
                     return False
+                if resource is not None:
+                    rkey = (resource, slot)
+                    pending_resource[rkey] = pending_resource.get(rkey, 0) + 1
+                    if (
+                        self.used_per_resource.get(rkey, 0) + pending_resource[rkey]
+                        > self.resource_caps[resource]
+                    ):
+                        return False
         return True
 
 

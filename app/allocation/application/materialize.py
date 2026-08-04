@@ -28,6 +28,7 @@ from app.availability.application.capacity import (
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.capability.application.matrix import ceil_to_grid, load_matrix
+from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
 from app.slot_locks.application.locks import locks_overlapping
@@ -138,6 +139,14 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         else:
             for windows in timelines.values():
                 windows.append((lock.start_time, lock.end_time))
+
+    # Staff leave follows the tech across the chain: fold each leave window into
+    # their personal timeline so no leg is ever seated during it (edge case 10's
+    # sibling - a planned absence rather than a same-day sick call).
+    leave_windows = leaves_for_day(db, [staff.id for staff in staff_list], target_date)
+    for staff_id, windows in leave_windows.items():
+        if staff_id in timelines:
+            timelines[staff_id].extend(windows)
 
     for windows in timelines.values():
         windows.sort()
