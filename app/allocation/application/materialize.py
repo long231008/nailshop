@@ -136,13 +136,17 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
 
     # Personal timelines and the day's turn ledger start from legs that already
     # have a technician: an earlier run of this job, or a manual reassignment.
-    timelines: dict[UUID, list] = {staff.id: [] for staff in staff_list}
+    # Those are settled, so they live in `fixed` and the repair pass below never
+    # touches them. Legs this run seats itself go in `seated`, where they can
+    # still be moved to make room for someone who would otherwise get nobody.
+    fixed: dict[UUID, list] = {staff.id: [] for staff in staff_list}
+    seated: dict[UUID, list] = {staff.id: [] for staff in staff_list}
     turns: dict[UUID, float] = {staff.id: 0.0 for staff in staff_list}
     last_finish: dict[UUID, object] = {}
     for detail, _booking, service in rows:
-        if detail.staff_id in timelines:
+        if detail.staff_id in fixed:
             hold_end = detail.end_time + timedelta(minutes=service.buffer_after_min)
-            timelines[detail.staff_id].append((detail.start_time, hold_end))
+            fixed[detail.staff_id].append((detail.start_time, hold_end))
             turns[detail.staff_id] += float(service.turn_weight)
             prev = last_finish.get(detail.staff_id)
             if prev is None or detail.end_time > prev:
@@ -154,10 +158,10 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     lock_day_start, lock_day_end = day_bounds_utc(target_date)
     for lock in locks_overlapping(db, branch_id, lock_day_start, lock_day_end):
         if lock.staff_id is not None:
-            if lock.staff_id in timelines:
-                timelines[lock.staff_id].append((lock.start_time, lock.end_time))
+            if lock.staff_id in fixed:
+                fixed[lock.staff_id].append((lock.start_time, lock.end_time))
         else:
-            for windows in timelines.values():
+            for windows in fixed.values():
                 windows.append((lock.start_time, lock.end_time))
 
     # Staff leave follows the tech across the chain: fold each leave window into
@@ -165,15 +169,57 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     # sibling - a planned absence rather than a same-day sick call).
     leave_windows = leaves_for_day(db, [staff.id for staff in staff_list], target_date)
     for staff_id, windows in leave_windows.items():
-        if staff_id in timelines:
-            timelines[staff_id].extend(windows)
+        if staff_id in fixed:
+            fixed[staff_id].extend(windows)
 
-    for windows in timelines.values():
+    for windows in fixed.values():
         windows.sort()
 
     day_start, _ = day_bounds_utc(target_date)
-    assigned = 0
-    unassigned = 0
+    by_id = {detail.id: (detail, service) for detail, _booking, service in rows}
+    pending = [detail.id for detail, _booking, _service in rows if detail.staff_id is None]
+
+    def shape(detail, service, staff_id):
+        """(minutes, end, hold_end) for this tech doing this leg, or None if the
+        matrix says they cannot do it at all."""
+        minutes = matrix.get(staff_id, {}).get(service.id)
+        if minutes is None:
+            if configured:
+                return None
+            minutes = service.duration_min  # matrix not filled in yet
+        real = ceil_to_grid(minutes + length_minutes.get(detail.id, 0))
+        end = detail.start_time + timedelta(minutes=real)
+        return real, end, end + timedelta(minutes=service.buffer_after_min)
+
+    def blockers(staff_id, start, hold_end, ignore=()):
+        """What stands between this tech and that window: None if something that
+        can never give way (a lock, leave, or a settled leg), otherwise the legs
+        this run seated there - which the repair pass may move."""
+        if not all(b <= start or a >= hold_end for a, b in fixed[staff_id]):
+            return None
+        return [
+            detail_id
+            for detail_id, (a, b) in seated[staff_id]
+            if detail_id not in ignore and a < hold_end and b > start
+        ]
+
+    def place(detail, service, staff_id, real, end, hold_end):
+        detail.staff_id = staff_id
+        # Shrink to the assigned tech's real minutes (v3.2) so the timeline
+        # shows when the tech is really free again.
+        detail.end_time = end
+        detail.duration_min = real
+        seated[staff_id].append((detail.id, (detail.start_time, hold_end)))
+        week_minutes[staff_id] = week_minutes.get(staff_id, 0) + real
+        turns[staff_id] += float(service.turn_weight)
+
+    def lift(detail, service):
+        """Take a leg back off a tech, undoing everything place() recorded."""
+        staff_id = detail.staff_id
+        seated[staff_id] = [entry for entry in seated[staff_id] if entry[0] != detail.id]
+        week_minutes[staff_id] -= detail.duration_min
+        turns[staff_id] -= float(service.turn_weight)
+        detail.staff_id = None
 
     for detail, booking, service in rows:
         if detail.staff_id is not None:
@@ -182,34 +228,24 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         booking_staff = {
             d.staff_id for d, b, _s in rows if b.id == booking.id and d.staff_id is not None
         }
-        extra = length_minutes.get(detail.id, 0)
         candidates = []
         for staff in staff_list:
-            minutes = matrix.get(staff.id, {}).get(service.id)
-            if minutes is None:
-                if configured:
-                    continue
-                minutes = service.duration_min  # matrix not filled in yet
-            real = ceil_to_grid(minutes + extra)
+            fit = shape(detail, service, staff.id)
+            if fit is None:
+                continue
+            real, end, hold_end = fit
             if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
                 continue  # no hours left that week
-            real_end = detail.start_time + timedelta(minutes=real)
-            hold_end = real_end + timedelta(minutes=service.buffer_after_min)
-            if not all(
-                b_end <= detail.start_time or b_start >= hold_end
-                for b_start, b_end in timelines[staff.id]
-            ):
+            busy = blockers(staff.id, detail.start_time, hold_end)
+            if busy is None or busy:
                 continue
-            candidates.append((staff, real_end, hold_end))
+            candidates.append((staff, real, end, hold_end))
 
         if not candidates:
-            unassigned += 1
-            continue
+            continue  # the repair pass below gets a second go at this one
 
-        affinity = _customer_affinity(
-            db, booking.customer_id, [staff.id for staff, _, _ in candidates]
-        )
-        staff, real_end, hold_end = min(
+        affinity = _customer_affinity(db, booking.customer_id, [e[0].id for e in candidates])
+        staff, real, end, hold_end = min(
             candidates,
             key=lambda entry: (
                 turns[entry[0].id],  # fairness first (doc 3.5)
@@ -218,20 +254,58 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
                 last_finish.get(entry[0].id, day_start),  # longest idle wins ties
             ),
         )
-
-        detail.staff_id = staff.id
-        # Shrink to the assigned tech's real minutes (v3.2) so the timeline
-        # shows when the tech is really free again.
-        detail.end_time = real_end
-        detail.duration_min = int((real_end - detail.start_time).total_seconds() // 60)
-        timelines[staff.id].append((detail.start_time, hold_end))
-        timelines[staff.id].sort()
-        week_minutes[staff.id] = week_minutes.get(staff.id, 0) + detail.duration_min
-        turns[staff.id] += float(service.turn_weight)
+        place(detail, service, staff.id, real, end, hold_end)
         prev = last_finish.get(staff.id)
-        if prev is None or real_end > prev:
-            last_finish[staff.id] = real_end
-        assigned += 1
+        if prev is None or end > prev:
+            last_finish[staff.id] = end
+
+    # Repair. The pass above is greedy and takes fairness first, so it happily
+    # gives a job several techs could do to the one tech a later job needs, and
+    # that later job then has nobody - even though a complete assignment did
+    # exist. Capacity only sold the day because an exact matching existed
+    # (availability/capacity.py), so a leg left over here is this allocator
+    # failing to find one, not an oversell.
+    #
+    # So walk an augmenting path: offer the leg to a tech who is busy, and move
+    # the leg standing in the way to someone else, recursively. `tried` stops it
+    # walking in circles. Fairness still decides everything the greedy pass
+    # could settle - this only runs where a customer would otherwise be left
+    # with no technician at all, which is the worse outcome by far.
+    def reseat(detail_id, tried: set) -> bool:
+        detail, service = by_id[detail_id]
+        for staff in staff_list:
+            if staff.id in tried:
+                continue
+            fit = shape(detail, service, staff.id)
+            if fit is None:
+                continue
+            real, end, hold_end = fit
+            if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
+                continue
+            busy = blockers(staff.id, detail.start_time, hold_end)
+            if busy is None or len(busy) > 1:
+                # Locks and leave never give way, and shifting a whole cluster
+                # of legs at once is a different problem: one deep is far enough
+                # to undo the greedy pass's mistakes without a costly search.
+                continue
+            tried.add(staff.id)
+            if busy:
+                victim, victim_service = by_id[busy[0]]
+                home = victim.staff_id
+                lift(victim, victim_service)
+                if not reseat(victim.id, tried):
+                    place(victim, victim_service, home, *shape(victim, victim_service, home))
+                    continue
+            place(detail, service, staff.id, real, end, hold_end)
+            return True
+        return False
+
+    for detail_id in pending:
+        if by_id[detail_id][0].staff_id is None:
+            reseat(detail_id, set())
+
+    assigned = sum(1 for detail_id in pending if by_id[detail_id][0].staff_id is not None)
+    unassigned = len(pending) - assigned
 
     run = AllocationRunModel(
         branch_id=branch_id,
