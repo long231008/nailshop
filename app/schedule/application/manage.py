@@ -20,9 +20,7 @@ from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
 from app.availability.application.capacity import (
     CapacityLedger,
-    eligible_staff,
     planning_minutes,
-    rare_service_cap,
     staff_timeline_busy,
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
@@ -147,7 +145,6 @@ def add_appointment(
 
     prepared: list[dict] = []
     capacity_legs: list[dict] = []
-    service_caps: dict[UUID, int] = {}
     total_price = Decimal("0")
     cursor = start_time
     for service_id in service_ids:
@@ -173,9 +170,6 @@ def add_appointment(
                 "end": end_time + timedelta(minutes=service.buffer_after_min),
             }
         )
-        service_caps[service.id] = rare_service_cap(
-            len(eligible_staff(db, branch_id, service.id, day))
-        )
         prepared.append(
             {
                 "service_id": service.id,
@@ -192,17 +186,17 @@ def add_appointment(
     visit_start, visit_end = capacity_legs[0]["start"], capacity_legs[-1]["end"]
     ledger = CapacityLedger(db, branch_id, day)
     if staff is not None:
-        # A named tech must be free for the whole visit; physical resources are
-        # still a hard cap, but the group-lane abstraction no longer applies.
+        # A named tech must be free for the whole visit; their own timeline is
+        # the check, so only the physical resources still cap the day.
         busy = _staff_busy_windows(db, staff.id, branch_id, day)
         if any(b_start < visit_end and b_end > visit_start for b_start, b_end in busy):
             raise AppointmentConflictError()
         if not ledger.resource_fits(capacity_legs):
             raise AppointmentError("No free chair, table or bed for this time")
     else:
-        # No tech named: the day needs lanes and physical spots for the nightly
-        # allocator to seat it, exactly as an online booking would.
-        if not ledger.fits(capacity_legs, service_caps):
+        # No tech named: the day must still be staffable with this visit added,
+        # exactly as an online booking would be.
+        if not ledger.fits(capacity_legs):
             raise AppointmentError("This time is full at this branch")
 
     booking = BookingModel(

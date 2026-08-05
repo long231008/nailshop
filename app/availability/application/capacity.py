@@ -1,16 +1,22 @@
 """Capacity ledger - where every advance booking goes through (doc v3.1/3.2, 3.3b).
 
-Future days are sold against *lanes*, not against named technicians: nobody knows
-yet which tech serves which booking (that is decided at the nightly close, doc 4).
-A lane is one overlapping customer within one 15-minute slot of one skill group.
+Future days are sold without naming a technician: who serves whom is decided at
+the nightly close (doc 4). What the sale must guarantee is only that *some*
+valid assignment exists - not which one.
 
-Lane cap per slot = the expected techs of that group (full capacity - the shop
-is appointment-only, no walk-in lane is held back). Counting lanes (not minutes)
-is what makes the nightly materialize structurally feasible: "overlapping
-legs <= techs" implies an interval colouring exists.
+So a time is sellable when the legs overlapping it can be handed to distinct
+technicians, each able to perform their own service. That is a bipartite
+matching between legs and capable, present technicians, checked per 15-minute
+slot. Asking the real question keeps the nightly materialize feasible without
+the two errors a per-skill-group head count makes: it undercounts an
+all-rounder (who can only be counted in one group, so a slot two technicians
+could cover looks full) and overcounts a jagged matrix (two specialities only
+the same technician can do look like two free lanes).
+
+The shop is appointment-only, so every expected technician is sellable - no
+lane is held back for walk-ins.
 """
 
-from collections import Counter
 from datetime import date as date_type
 from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
@@ -92,34 +98,11 @@ def booking_window_state(target_date: date_type, now: datetime | None = None) ->
     return BookingWindow.OPEN
 
 
-def _primary_group(cells: dict[UUID, int], services: dict[UUID, ServiceModel]) -> str | None:
-    """Each tech counts toward exactly ONE skill group per day, so lane maths
-    never double-counts a multi-skilled tech (doc 3.3b, staffing_plan)."""
-    counts = Counter(
-        services[service_id].skill_group for service_id in cells if service_id in services
-    )
-    if not counts:
-        return None
-    return min(counts, key=lambda group: (-counts[group], group))
-
-
 def matrix_configured_for(staff_list: list[StaffModel], matrix: dict) -> bool:
     """Has the owner filled in capability cells for any of these techs? Until
     then the scheduler runs in legacy mode: menu durations, everyone assumed
     able to do everything. The first saved cell flips the switch (v3.2)."""
     return any(matrix.get(staff.id) for staff in staff_list)
-
-
-def eligible_staff(
-    db: Session, branch_id: UUID, service_id: UUID, day: date_type
-) -> list[StaffModel]:
-    """Techs expected at the branch on `day` (per the staffing plan) who can do
-    the service."""
-    staff_list = expected_staff(db, branch_id, day)
-    matrix = load_matrix(db)
-    if not matrix_configured_for(staff_list, matrix):
-        return staff_list
-    return [staff for staff in staff_list if service_id in matrix.get(staff.id, {})]
 
 
 def planning_minutes(db: Session, branch_id: UUID, service_id: UUID, day: date_type) -> int | None:
@@ -178,6 +161,9 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
             "service_id": service.id,
             "skill_group": service.skill_group,
             "resource": service.resource,
+            # Set once the nightly run (or the desk) named a technician: that
+            # leg holds that person, not just any capable one.
+            "staff_id": detail.staff_id,
             "start": detail.start_time,
             "end": detail.end_time + timedelta(minutes=service.buffer_after_min),
         }
@@ -185,13 +171,35 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
     ]
 
 
-class CapacityLedger:
-    """Snapshot of one (branch, day): lane caps and lanes already sold.
+def _shareable(legs: list[dict], staff_ids: list[UUID], can_do) -> bool:
+    """Can every leg be given its own technician? (Kuhn's augmenting path.)
 
-    Three limits stack on every 15-minute slot:
-    - the skill-group lane cap (expected techs of that group), shrunk in any slot
-      a counted tech is on leave;
-    - a rare-service cap (a speciality only some techs can do);
+    True exactly when a matching covering all legs exists, so the sale is only
+    allowed when the nightly run has at least one way to seat everyone. The
+    graphs are a handful of legs against a handful of technicians, so the plain
+    algorithm is far cheaper than the query that built the inputs.
+    """
+    holder: dict[UUID, int] = {}
+
+    def seat(index: int, tried: set) -> bool:
+        for staff_id in staff_ids:
+            if staff_id in tried or not can_do(staff_id, legs[index]):
+                continue
+            tried.add(staff_id)
+            if staff_id not in holder or seat(holder[staff_id], tried):
+                holder[staff_id] = index
+                return True
+        return False
+
+    return all(seat(index, set()) for index in range(len(legs)))
+
+
+class CapacityLedger:
+    """Snapshot of one (branch, day): who is expected in, and what is booked.
+
+    Two limits stack on every 15-minute slot:
+    - the legs overlapping it must be shareable among distinct technicians who
+      can each do their own service and are not on leave then;
     - a physical-resource cap (pedicure chairs / tables / massage beds).
     """
 
@@ -199,50 +207,55 @@ class CapacityLedger:
         self.day = day
         staff_list = expected_staff(db, branch_id, day)
         matrix = load_matrix(db)
-        services = {s.id: s for s in db.query(ServiceModel).all()}
-        leave_windows = leaves_for_day(db, [staff.id for staff in staff_list], day)
-
-        # Per-slot lane cap = the group's expected head count minus the techs of
-        # that group whose leave covers the slot. Legacy mode (no matrix yet)
-        # keeps one pooled cap over every expected tech.
         self.configured = matrix_configured_for(staff_list, matrix)
-        self.base_caps: dict[str, int] = {}
-        self.group_leaves: dict[str, list[tuple]] = {}
-        self.base_default = 0
-        self.default_leaves: list[tuple] = []
-        for staff in staff_list:
-            windows = leave_windows.get(staff.id, [])
-            if self.configured:
-                group = _primary_group(matrix.get(staff.id, {}), services)
-                if group is None:
-                    continue
-                self.base_caps[group] = self.base_caps.get(group, 0) + 1
-                if windows:
-                    self.group_leaves.setdefault(group, []).extend(windows)
-            else:
-                self.base_default += 1
-                self.default_leaves.extend(windows)
+        self.staff_ids = [staff.id for staff in staff_list]
+        self.skills = {staff.id: set(matrix.get(staff.id, {})) for staff in staff_list}
+        self.leave = leaves_for_day(db, self.staff_ids, day)
 
         branch = db.get(LocationModel, branch_id)
         self.resource_caps = branch_resource_caps(branch) if branch is not None else {}
 
-        self.used: dict[tuple[str, datetime], int] = {}
-        self.used_per_service: dict[tuple[UUID, datetime], int] = {}
+        self.booked: dict[datetime, list[dict]] = {}
         self.used_per_resource: dict[tuple[str, datetime], int] = {}
         for leg in existing_legs(db, branch_id, day):
-            self._count(leg)
+            resource = self._resource_of(leg)
+            for slot in _slots_covered(leg["start"], leg["end"]):
+                self.booked.setdefault(slot, []).append(leg)
+                if resource is not None:
+                    key = (resource, slot)
+                    self.used_per_resource[key] = self.used_per_resource.get(key, 0) + 1
 
-    def _group_cap(self, group: str, slot: datetime) -> int:
-        """Sellable lanes of a group in one 15-minute slot, after leave."""
+    def _can_do(self, staff_id: UUID, leg: dict) -> bool:
+        # Legacy mode (not one capability cell saved yet): everybody does
+        # everything, exactly as the scheduler assumed before the matrix.
+        return not self.configured or leg["service_id"] in self.skills.get(staff_id, ())
+
+    def _present(self, slot: datetime) -> list[UUID]:
+        """Technicians expected in and not on leave during this slot."""
         slot_end = slot + timedelta(minutes=GRID_MINUTES)
-        if self.configured:
-            base = self.base_caps.get(group, 0)
-            windows = self.group_leaves.get(group, ())
-        else:
-            base = self.base_default
-            windows = self.default_leaves
-        on_leave = sum(1 for w_start, w_end in windows if w_start < slot_end and w_end > slot)
-        return max(0, base - on_leave)
+        return [
+            staff_id
+            for staff_id in self.staff_ids
+            if not any(
+                start < slot_end and end > slot for start, end in self.leave.get(staff_id, ())
+            )
+        ]
+
+    def _servable(self, slot: datetime, occupants: list[dict]) -> bool:
+        pool = self._present(slot)
+        free_pool = set(pool)
+        open_legs = []
+        for leg in occupants:
+            named = leg.get("staff_id")
+            if named is None:
+                open_legs.append(leg)
+            elif named in free_pool:
+                free_pool.discard(named)  # already promised to that technician
+            # A leg named to someone not expected in today is being served
+            # outside this plan (a manual move), so it holds nobody here.
+        if not open_legs:
+            return True
+        return _shareable(open_legs, [s for s in pool if s in free_pool], self._can_do)
 
     def _resource_of(self, leg: dict) -> str | None:
         """The tracked physical resource a leg needs, or None when its resource
@@ -250,22 +263,11 @@ class CapacityLedger:
         resource = leg.get("resource")
         return resource if resource in self.resource_caps else None
 
-    def _count(self, leg: dict) -> None:
-        resource = self._resource_of(leg)
-        for slot in _slots_covered(leg["start"], leg["end"]):
-            key = (leg["skill_group"], slot)
-            self.used[key] = self.used.get(key, 0) + 1
-            skey = (leg["service_id"], slot)
-            self.used_per_service[skey] = self.used_per_service.get(skey, 0) + 1
-            if resource is not None:
-                rkey = (resource, slot)
-                self.used_per_resource[rkey] = self.used_per_resource.get(rkey, 0) + 1
-
     def resource_fits(self, legs: list[dict]) -> bool:
         """Physical-resource check only (pedicure chairs / tables / beds), for the
-        desk adding an appointment to a named technician: the group-lane cap is a
-        nightly-allocation abstraction and does not apply once a free tech is
-        chosen, but a chair or bed is still a hard limit."""
+        desk adding an appointment to a named technician: that technician's own
+        timeline is checked separately, but a chair or bed is still a hard limit.
+        """
         pending_resource: dict[tuple[str, datetime], int] = {}
         for leg in legs:
             resource = self._resource_of(leg)
@@ -281,29 +283,18 @@ class CapacityLedger:
                     return False
         return True
 
-    def fits(self, legs: list[dict], service_lane_caps: dict[UUID, int]) -> bool:
-        """Would these new legs stay under every cap? Legs of the same proposal
-        are counted against each other too (parallel steps use 2 lanes).
-        service_lane_caps: rare-service guard, floor/at-least-1 of eligible techs.
+    def fits(self, legs: list[dict]) -> bool:
+        """Could the day still be staffed with these legs added?
+
+        Legs of the same proposal count against each other too: two steps of one
+        visit that overlap need two technicians, the same as two customers.
         """
-        pending: dict[tuple[str, datetime], int] = {}
-        pending_service: dict[tuple[UUID, datetime], int] = {}
+        touched: dict[datetime, list[dict]] = {}
         pending_resource: dict[tuple[str, datetime], int] = {}
         for leg in legs:
             resource = self._resource_of(leg)
             for slot in _slots_covered(leg["start"], leg["end"]):
-                key = (leg["skill_group"], slot)
-                pending[key] = pending.get(key, 0) + 1
-                if self.used.get(key, 0) + pending[key] > self._group_cap(leg["skill_group"], slot):
-                    return False
-                skey = (leg["service_id"], slot)
-                pending_service[skey] = pending_service.get(skey, 0) + 1
-                service_cap = service_lane_caps.get(leg["service_id"])
-                if (
-                    service_cap is not None
-                    and self.used_per_service.get(skey, 0) + pending_service[skey] > service_cap
-                ):
-                    return False
+                touched.setdefault(slot, []).append(leg)
                 if resource is not None:
                     rkey = (resource, slot)
                     pending_resource[rkey] = pending_resource.get(rkey, 0) + 1
@@ -312,14 +303,11 @@ class CapacityLedger:
                         > self.resource_caps[resource]
                     ):
                         return False
-        return True
 
-
-def rare_service_cap(eligible_count: int) -> int:
-    """Concurrent legs of one service <= its eligible techs - one tech's
-    speciality is sellable, just not twice at the same instant (doc 1.1
-    rule 3)."""
-    return max(1, eligible_count)
+        return all(
+            self._servable(slot, self.booked.get(slot, []) + pending)
+            for slot, pending in touched.items()
+        )
 
 
 def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tuple]:

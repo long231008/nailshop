@@ -21,10 +21,8 @@ from app.availability.application.capacity import (
     BookingWindow,
     CapacityLedger,
     booking_window_state,
-    eligible_staff,
     matrix_configured_for,
     planning_minutes,
-    rare_service_cap,
 )
 from app.bookings.application.exceptions import (
     DailyBookingLimitExceededError,
@@ -103,7 +101,6 @@ def create_booking(
 
     prepared_items = []
     capacity_legs = []
-    service_caps: dict[UUID, int] = {}
     total_duration = 0
     total_price = Decimal("0")
     cursor = booking_start
@@ -201,9 +198,6 @@ def create_booking(
                 "end": end_time + timedelta(minutes=service.buffer_after_min),
             }
         )
-        service_caps[service.id] = rare_service_cap(
-            len(eligible_staff(db, payload.branch_id, service.id, booking_date))
-        )
 
         # Every leg must still *start* within booking hours; a long visit may
         # then run past closing - that's the salon's explicit choice.
@@ -226,7 +220,7 @@ def create_booking(
         total_price += price
         cursor = end_time  # items run back-to-back: one customer, one chair
 
-    if capacity_legs and not ledger.fits(capacity_legs, service_caps):
+    if capacity_legs and not ledger.fits(capacity_legs):
         raise InvalidBookingItemsError("This time no longer has room - please pick another time")
 
     existing_minutes = (

@@ -4,9 +4,9 @@ Two layers of duration, two purposes:
 - ServiceModel.duration_min is the *menu* duration customers read.
 - StaffCapabilityModel.minutes is the *real* duration the scheduler runs on.
 
-Every part of the scheduler asks this module instead of guessing:
-`can_do`, `real_minutes`, `planning_minutes` (the cautious any-tech hold),
-and `eligible_staff` (who could do a service on a given day).
+Every part of the scheduler asks this module instead of guessing: `real_minutes`
+for one cell, `load_matrix` for the whole grid the capacity check shares work
+out against, and `planning_minutes` (the cautious any-tech hold).
 """
 
 import math

@@ -16,10 +16,8 @@ from app.availability.application.capacity import (
     BookingWindow,
     CapacityLedger,
     booking_window_state,
-    eligible_staff,
     existing_legs,
     planning_minutes,
-    rare_service_cap,
 )
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import last_booking_utc, opening_window_utc
@@ -128,13 +126,9 @@ def find_available_slots(
         return False
 
     ledger = CapacityLedger(db, branch_id, target_date)
-    service_caps = {
-        service.id: rare_service_cap(len(eligible_staff(db, branch_id, service.id, target_date)))
-        for service in services
-    }
 
     def checker(placed) -> bool:
-        return not _locked(placed) and ledger.fits(placed, service_caps)
+        return not _locked(placed) and ledger.fits(placed)
 
     # Times that keep the salon's day tight, used only to flag a slot as
     # recommended - every sellable time is still offered and bookable.
