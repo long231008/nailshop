@@ -64,3 +64,50 @@ class AppointmentMutationResponse(BaseModel):
     staff_id: UUID | None
     start_time: datetime
     end_time: datetime
+
+
+class DeskSlot(BaseModel):
+    start_time: datetime
+    end_time: datetime
+    # Leaves the salon's day without a gap. Every listed time can be booked;
+    # this one just costs the shop nothing.
+    recommended: bool = False
+
+
+class DeskSlotsResponse(BaseModel):
+    date: date
+    slots: list[DeskSlot]
+
+
+class SheetAppointment(BaseModel):
+    booking_id: UUID
+    start_time: datetime
+    end_time: datetime
+    service_name: str
+    customer_name: str | None
+    customer_phone: str | None
+    price: float
+    status: str
+    design_image_url: str | None = None
+    design_description: str | None = None
+
+
+class DaySheet(BaseModel):
+    staff_id: UUID
+    staff_name: str
+    # Which shop to turn up at, from the nightly roster.
+    branch_id: UUID | None
+    branch_name: str | None
+    appointment_count: int
+    working_minutes: int
+    first_start: datetime | None
+    last_end: datetime | None
+    appointments: list[SheetAppointment]
+
+
+class DaySheetsResponse(BaseModel):
+    date: date
+    # False until the 21:00 run has closed this day, when the sheets are still
+    # provisional - only named technicians appear on them.
+    allocated: bool
+    sheets: list[DaySheet]

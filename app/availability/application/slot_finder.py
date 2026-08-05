@@ -21,7 +21,11 @@ from app.availability.application.capacity import (
 )
 from app.capability.application.matrix import ceil_to_grid
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
-from app.shared.infrastructure.clock import last_booking_utc, opening_window_utc
+from app.shared.infrastructure.clock import (
+    last_booking_utc,
+    opening_window_utc,
+    today_in_shop_tz,
+)
 from app.slot_locks.application.locks import locks_overlapping
 
 SLOT_STEP_MINUTES = 15
@@ -97,13 +101,20 @@ def find_available_slots(
     service_ids: list[UUID],
     target_date: date_type,
     extension_ids: list[UUID | None] | None = None,
+    enforce_window: bool = True,
 ) -> list[dict]:
     services = [db.get(ServiceModel, service_id) for service_id in service_ids]
     if any(service is None for service in services):
         raise ServiceNotFoundError()
 
+    # The desk is not the website. Staff take walk-ins for this afternoon and
+    # answer the phone after tonight's close, so the customer booking window is
+    # not theirs to obey - but a Sunday, a date past the horizon and a day
+    # already gone are shut to everyone.
     state = booking_window_state(target_date)
-    if state != BookingWindow.OPEN:
+    if state in (BookingWindow.CLOSED_DAY, BookingWindow.TOO_FAR):
+        raise BookingWindowClosedError(state)
+    if state != BookingWindow.OPEN and (enforce_window or target_date < today_in_shop_tz()):
         raise BookingWindowClosedError(state)
 
     # A length chosen for a service makes its leg longer, so the search has to

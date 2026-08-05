@@ -5,6 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.availability.application.slot_finder import (
+    BookingWindowClosedError,
+    ServiceNotFoundError,
+    find_available_slots,
+)
 from app.bookings.application.cancel import cancel_booking_by_salon
 from app.bookings.application.exceptions import BookingNotFoundError, InvalidBookingStateError
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
@@ -12,6 +17,7 @@ from app.notification.application.notify import notify_booking_cancelled_by_salo
 from app.notification.domain.sender import NotificationSender
 from app.notification.infrastructure.senders import get_notification_sender
 from app.schedule.application.daily import get_daily_schedule, get_upcoming_pending
+from app.schedule.application.day_sheet import get_day_sheets
 from app.schedule.application.manage import (
     AppointmentConflictError,
     AppointmentError,
@@ -24,11 +30,16 @@ from app.schedule.presentation.schemas import (
     AppointmentMutationResponse,
     DailyAppointment,
     DailyScheduleResponse,
+    DaySheet,
+    DaySheetsResponse,
+    DeskSlot,
+    DeskSlotsResponse,
     PendingAppointment,
     RescheduleAppointmentRequest,
 )
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
+from app.staff.infrastructure.models import StaffModel
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -72,6 +83,70 @@ def daily_schedule(
         ),
         appointments=[DailyAppointment(**a) for a in appointments],
         pending=[PendingAppointment(**p) for p in pending],
+    )
+
+
+@router.get("/slots", response_model=DeskSlotsResponse)
+def desk_slots(
+    branch_id: UUID,
+    date: date_type,
+    service_ids: str = Query(description="Comma-separated service ids of the visit, in order"),
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.STAFF)),
+) -> DeskSlotsResponse:
+    """Times the desk can still sell on this day, with the tidy ones marked.
+
+    The same search the website runs, so a walk-in cannot be booked into a time
+    the salon has no room for - but without the customer booking window, since
+    the desk takes walk-ins for today and phone calls after tonight's close.
+    """
+    try:
+        ids = [UUID(part) for part in service_ids.split(",") if part.strip()]
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="service_ids must be comma-separated UUIDs",
+        )
+    if not ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one service is required",
+        )
+
+    try:
+        slots = find_available_slots(db, branch_id, ids, date, enforce_window=False)
+    except ServiceNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+    except BookingWindowClosedError:
+        return DeskSlotsResponse(date=date, slots=[])
+
+    return DeskSlotsResponse(date=date, slots=[DeskSlot(**slot) for slot in slots])
+
+
+@router.get("/day-sheets", response_model=DaySheetsResponse)
+def day_sheets(
+    date: date_type,
+    branch_id: UUID | None = None,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
+) -> DaySheetsResponse:
+    """One sheet per technician for a day: their shop, and their own customers.
+
+    Admins see everybody's. A member of staff sees their own and nobody else's,
+    whatever they ask for - the filter is taken from the token, not the query.
+    """
+    only_staff_id = None
+    if current_user.role != UserRole.ADMIN:
+        member = db.query(StaffModel).filter(StaffModel.user_id == current_user.id).first()
+        if member is None:
+            return DaySheetsResponse(date=date, allocated=False, sheets=[])
+        only_staff_id = member.id
+
+    result = get_day_sheets(db, date, branch_id, only_staff_id)
+    return DaySheetsResponse(
+        date=result["date"],
+        allocated=result["allocated"],
+        sheets=[DaySheet(**sheet) for sheet in result["sheets"]],
     )
 
 
