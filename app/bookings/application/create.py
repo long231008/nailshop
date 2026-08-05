@@ -223,7 +223,7 @@ def create_booking(
         total_price += price
         cursor = end_time  # items run back-to-back: one customer, one chair
 
-    if capacity_legs and not ledger.fits(capacity_legs):
+    if capacity_legs and not ledger.can_be_staffed(capacity_legs):
         raise InvalidBookingItemsError("This time no longer has room - please pick another time")
 
     existing_minutes = (

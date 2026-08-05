@@ -18,13 +18,10 @@ their week, or put on a chair the branch has not got; and that every leg sold
 has a technician. It stops at the first day that breaks one and prints a seed
 to reproduce with.
 
-KNOWN OPEN: seeds 93 and 101 (and 13 with everyone full time) report legs sold
-that nobody could ever have worked. The capacity ledger matches technicians to
-legs one 15-minute slot at a time, and each slot is matched independently, so a
-leg can be covered by one technician in one slot and another in the next - a
-day every slot can staff, that no single assignment can. Leave or a shift
-ending mid-leg is what makes it reachable. Selling exactly would mean solving
-the whole day on the booking path, not per slot; this is not that.
+Seeds worth keeping after touching the scheduler: 23, 28, 33 and 93 each found
+an allocator that gave up while an assignment existed; 7, 93 and 101 each found
+a day sold that nobody could have worked. All are green - they are the
+regression set, not a to-do list.
 
 Everything it creates is named "Simulator", so --reset removes it and nothing
 else. It never touches data you made yourself.

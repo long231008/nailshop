@@ -214,7 +214,7 @@ def add_appointment(
     else:
         # No tech named: the day must still be staffable with this visit added,
         # exactly as an online booking would be.
-        if not ledger.fits(capacity_legs):
+        if not ledger.can_be_staffed(capacity_legs):
             raise AppointmentError("This time is full at this branch")
 
     booking = BookingModel(

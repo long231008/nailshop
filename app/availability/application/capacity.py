@@ -41,6 +41,11 @@ from app.staff.infrastructure.models import StaffModel
 
 GRID_MINUTES = 15
 
+# Ceiling on the whole-day search below. Backtracking is exponential in the
+# worst case; a busy branch-day is nowhere near it, but the sale path is no
+# place to find out.
+SOLVE_BUDGET = 20_000
+
 # A service claims one physical spot through its `resource` field; the branch
 # holds a fixed count of each. A count of 0 means "not tracked" (unlimited), so
 # only positive caps ever constrain a booking.
@@ -167,9 +172,16 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
             "staff_id": detail.staff_id,
             "start": detail.start_time,
             "end": detail.end_time + timedelta(minutes=service.buffer_after_min),
+            # The work itself, buffer excluded - what the hours ledger counts.
+            "service_end": detail.end_time,
         }
         for detail, service in rows
     ]
+
+
+def _work_minutes(leg: dict) -> int:
+    """The leg's own minutes, buffer excluded - what a week's hours are spent on."""
+    return int((leg.get("service_end", leg["end"]) - leg["start"]).total_seconds() // 60)
 
 
 def _shareable(legs: list[dict], staff_ids: list[UUID], can_do) -> bool:
@@ -216,14 +228,19 @@ class CapacityLedger:
         # have to shrink with them - otherwise the shop sells a five o'clock
         # nobody is left to work.
         self.hours = {staff.id: working_window(staff, day) for staff in staff_list}
-        self.week_free, self.week_owed = week_hours_budget(db, staff_list, branch_id, day)
+        self.week_cap = {staff.id: staff.max_hours_week * 60 for staff in staff_list}
+        self.week_used, self.week_owed = week_hours_budget(db, staff_list, branch_id, day)
+        self.week_free = sum(
+            max(0, self.week_cap[staff_id] - used) for staff_id, used in self.week_used.items()
+        )
 
         branch = db.get(LocationModel, branch_id)
         self.resource_caps = branch_resource_caps(branch) if branch is not None else {}
 
+        self.legs = existing_legs(db, branch_id, day)
         self.booked: dict[datetime, list[dict]] = {}
         self.used_per_resource: dict[tuple[str, datetime], int] = {}
-        for leg in existing_legs(db, branch_id, day):
+        for leg in self.legs:
             resource = self._resource_of(leg)
             for slot in _slots_covered(leg["start"], leg["end"]):
                 self.booked.setdefault(slot, []).append(leg)
@@ -277,6 +294,70 @@ class CapacityLedger:
             return True
         return _shareable(open_legs, [s for s in pool if s in free_pool], self._can_serve)
 
+    def can_be_staffed(self, legs: list[dict]) -> bool:
+        """The exact question, for the moment a booking is actually taken.
+
+        fits() asks it one 15-minute slot at a time, which is cheap enough to
+        run for every time on the page. It is a necessary condition, not a
+        sufficient one: each slot is matched on its own, so a leg can be covered
+        by one technician in one slot and somebody else in the next - a day
+        every slot can staff that no single assignment can. Leave, or a shift
+        ending mid-leg, is what makes that reachable.
+
+        This solves the whole day instead: one technician per leg, start to
+        finish, nobody in two places, nobody past their week. Slow enough that
+        it belongs here and not on the availability page - which was always a
+        list of suggestions re-checked at this point anyway.
+        """
+        if not self.fits(legs):
+            return False
+
+        day_legs = sorted(self.legs + list(legs), key=lambda leg: leg["start"])
+        busy: dict[UUID, list] = {staff_id: [] for staff_id in self.staff_ids}
+        spent = dict(self.week_used)
+        open_legs = []
+        for leg in day_legs:
+            named = leg.get("staff_id")
+            if named is None:
+                open_legs.append(leg)
+            elif named in busy:
+                busy[named].append(leg)
+                spent[named] = spent.get(named, 0) + _work_minutes(leg)
+
+        steps = [SOLVE_BUDGET]
+
+        def seat(index: int) -> bool:
+            if index == len(open_legs):
+                return True
+            if steps[0] <= 0:
+                # Out of search, which means "could not disprove", not "cannot
+                # be done". Refusing here would lose a booking that is probably
+                # fine; letting it through leaves the manager the same tidy-up
+                # they already have for a technician calling in sick.
+                return True
+            steps[0] -= 1
+            leg = open_legs[index]
+            need = _work_minutes(leg)
+            for staff_id in self.staff_ids:
+                if not self._can_serve(staff_id, leg):
+                    continue
+                if spent.get(staff_id, 0) + need > self.week_cap[staff_id]:
+                    continue
+                if any(
+                    held["start"] < leg["end"] and held["end"] > leg["start"]
+                    for held in busy[staff_id]
+                ):
+                    continue
+                busy[staff_id].append(leg)
+                spent[staff_id] = spent.get(staff_id, 0) + need
+                if seat(index + 1):
+                    return True
+                busy[staff_id].pop()
+                spent[staff_id] -= need
+            return False
+
+        return seat(0)
+
     def _resource_of(self, leg: dict) -> str | None:
         """The tracked physical resource a leg needs, or None when its resource
         is untracked at this branch (cap 0) or unset."""
@@ -312,10 +393,7 @@ class CapacityLedger:
         # Hours the team has left this week, against the work it already owes
         # plus this visit. A day can look perfectly staffable slot by slot and
         # still be work nobody has the hours left to do.
-        wanted = sum(
-            int((leg.get("service_end", leg["end"]) - leg["start"]).total_seconds() // 60)
-            for leg in legs
-        )
+        wanted = sum(_work_minutes(leg) for leg in legs)
         if self.week_owed + wanted > self.week_free:
             return False
 
@@ -342,8 +420,8 @@ class CapacityLedger:
 
 def week_hours_budget(
     db: Session, staff_list: list, branch_id: UUID, day: date_type
-) -> tuple[int, int]:
-    """(minutes still available across the team this week, minutes already owed).
+) -> tuple[dict, int]:
+    """(minutes each technician has already committed this week, minutes owed).
 
     max_hours_week is a ceiling the nightly run enforces, but selling never knew
     about it, so the salon could take four bookings a technician has hours for
@@ -360,7 +438,7 @@ def week_hours_budget(
     is theirs, not the shop's) but only this branch's owed work counted here.
     """
     if not staff_list:
-        return 0, 0
+        return {}, 0
     week_start = day - timedelta(days=day.weekday())
     week_end = week_start + timedelta(days=7)
     staff_ids = [staff.id for staff in staff_list]
@@ -380,10 +458,6 @@ def week_hours_budget(
         .group_by(BookingDetailModel.staff_id)
         .all()
     )
-    free = sum(
-        max(0, staff.max_hours_week * 60 - int(committed.get(staff.id, 0))) for staff in staff_list
-    )
-
     owed = (
         db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))
         .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
@@ -396,7 +470,7 @@ def week_hours_budget(
         )
         .scalar()
     )
-    return free, int(owed or 0)
+    return {staff.id: int(committed.get(staff.id, 0)) for staff in staff_list}, int(owed or 0)
 
 
 def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tuple]:
