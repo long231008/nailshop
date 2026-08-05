@@ -10,6 +10,9 @@ class AvailableSlot(BaseModel):
     staff_id: UUID | None
     start_time: datetime
     end_time: datetime
+    # Fits the salon's day without leaving a gap. A hint for the customer -
+    # every listed slot is bookable, recommended or not.
+    recommended: bool = False
 
 
 class AvailabilityResponse(BaseModel):

@@ -71,6 +71,60 @@ def test_availability_excludes_booked_slot_with_buffer(
         assert not (slot_start < booked_end and slot_end > booked_start)
 
 
+def test_recommended_slots_are_a_hint_not_a_filter(
+    client,
+    customer_headers,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    cleanup_records,
+):
+    """The salon's tidy times are flagged, but every sellable time stays on the
+    list: the customer keeps the final say over when they come in."""
+    target_date = seeded_shift["start"].date()
+    params = {
+        "branch_id": str(seeded_branch),
+        "service_id": str(seeded_service),
+        "date": target_date.isoformat(),
+    }
+
+    empty_day = client.get("/app/availability", params=params).json()["slots"]
+    assert len(empty_day) > 1
+    # Opening time keeps the day tight, so it is recommended; later starts are
+    # still offered, just not flagged.
+    assert empty_day[0]["recommended"] is True
+    assert any(slot["recommended"] is False for slot in empty_day)
+
+    booking = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booking["id"]))
+    cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+
+    after = client.get("/app/availability", params=params).json()["slots"]
+    booked_end = datetime.fromisoformat(booking["details"][0]["end_time"])
+    # The moment that booking frees the floor is now a recommended start.
+    follow_on = next(
+        (s for s in after if datetime.fromisoformat(s["start_time"]) == booked_end), None
+    )
+    assert follow_on is not None
+    assert follow_on["recommended"] is True
+    # And the list still offers times that are not recommended - nothing was
+    # filtered away.
+    assert any(slot["recommended"] is False for slot in after)
+
+
 def test_availability_unknown_service_returns_404(client, seeded_staff, seeded_shift):
     import uuid
 

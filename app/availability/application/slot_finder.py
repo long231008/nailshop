@@ -17,6 +17,7 @@ from app.availability.application.capacity import (
     CapacityLedger,
     booking_window_state,
     eligible_staff,
+    existing_legs,
     planning_minutes,
     rare_service_cap,
 )
@@ -135,17 +136,28 @@ def find_available_slots(
     def checker(placed) -> bool:
         return not _locked(placed) and ledger.fits(placed, service_caps)
 
+    # Times that keep the salon's day tight, used only to flag a slot as
+    # recommended - every sellable time is still offered and bookable.
+    booked = existing_legs(db, branch_id, target_date)
+    tidy_starts = {open_utc} | {leg["end"] for leg in booked}
+    tidy_ends = {leg["start"] for leg in booked}
+
     slots = []
     cursor = open_utc
     step = timedelta(minutes=SLOT_STEP_MINUTES)
     while cursor <= last_start:
         placed = place_legs(legs, cursor)
         if checker(placed):
+            visit_end = cursor + timedelta(minutes=total_minutes)
             slots.append(
                 {
                     "staff_id": None,
                     "start_time": cursor,
-                    "end_time": cursor + timedelta(minutes=total_minutes),
+                    "end_time": visit_end,
+                    # A hint, never a restriction: this visit either opens the
+                    # day, starts the moment an earlier one frees up, or closes
+                    # the gap before the next - so it leaves no dead time.
+                    "recommended": cursor in tidy_starts or visit_end in tidy_ends,
                 }
             )
         cursor += step
