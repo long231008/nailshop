@@ -17,8 +17,8 @@ ignore = ["E501", "UP017", "UP042", "B008", "B904"]
 known-first-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
-# needs sys.path.insert() before it can import app.* since it runs standalone, outside the package
-"scripts/seed_data.py" = ["E402"]
+# need sys.path.insert() before they can import app.* since they run standalone, outside the package
+"scripts/*.py" = ["E402"]
 # Alembic's own generated template requires config parsing before importing app.* models
 "migrations/env.py" = ["E402"]
 
