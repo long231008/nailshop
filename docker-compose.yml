@@ -1,0 +1,106 @@
+# Local development stack: Postgres, Redis and the API in one command.
+#
+#   docker compose up                  # database, cache, API
+#   docker compose --profile web up    # ... and the built frontend
+#   docker compose down                # stop everything (data is kept)
+#   docker compose down -v             # ... and throw the data away
+#
+# The API waits for the database and cache to report healthy, then runs
+# `alembic upgrade head` itself, so there is no order to remember.
+#
+# The `web` profile builds the frontend from a sibling checkout of
+# nailshop-frontend. Leave it out and only the backend stack starts, which is
+# what you want while running `npm run dev` for hot reload.
+
+name: nailshop
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nailshop
+    ports:
+      # Published so a database client on the host can reach it. Already running
+      # Postgres locally? Start with DB_PORT=5433 instead of stopping it.
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nailshop"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: DockerFile
+    ports:
+      - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Service names, not localhost: inside the network each container is
+      # reachable by the name it has here.
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/nailshop
+      REDIS_URL: redis://redis:6379/0
+
+      # Local-only secret. Production uses a real one from its secret store.
+      JWT_SECRET_KEY: local-development-secret-at-least-32-characters
+      PAYMENT_WEBHOOK_SECRET: local-development-webhook-secret
+
+      # "console" prints the one-time code straight into the log, so signing in
+      # locally is `docker compose logs api`. Never use it in production.
+      NOTIFICATION_BACKEND: ${NOTIFICATION_BACKEND:-console}
+
+      # The browser talks to both from the host, so these are host addresses.
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      FRONTEND_URL: http://localhost:5173
+      BACKEND_PUBLIC_URL: http://localhost:8001
+
+      # Placeholders so the app boots without accounts anywhere. Keeping the
+      # "your-" prefix on the Cloudinary name is what makes design photos go to
+      # the local uploads volume instead. Real values in a .env next to this
+      # file are picked up automatically.
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-your-cloud-name}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-your-api-key}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-your-api-secret}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-your-client-id.apps.googleusercontent.com}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-your-client-secret}
+      GOOGLE_OAUTH_REDIRECT_URI: http://localhost:8001/app/auth/google/callback
+    volumes:
+      # Design photos survive a rebuild while Cloudinary is not configured.
+      - uploads:/code/uploads
+
+  web:
+    profiles: ["web"]
+    build:
+      context: ../nailshop-frontend
+      args:
+        # Compiled into the bundle at build time, so it is the address the
+        # browser uses - not the one containers use between themselves.
+        VITE_API_BASE_URL: http://localhost:8001
+    ports:
+      - "5173:8080"
+    depends_on:
+      - api
+
+volumes:
+  db-data:
+  uploads:
