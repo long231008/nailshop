@@ -25,7 +25,12 @@ from app.availability.application.capacity import (
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.branches.infrastructure.models import LocationModel
-from app.capability.application.matrix import ceil_to_grid, is_available, load_matrix
+from app.capability.application.matrix import (
+    ceil_to_grid,
+    is_available,
+    load_matrix,
+    working_window,
+)
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import (
@@ -188,6 +193,9 @@ def add_appointment(
     if staff is not None:
         # A named tech must be free for the whole visit; their own timeline is
         # the check, so only the physical resources still cap the day.
+        work_start, work_end = working_window(staff, day)
+        if visit_start < work_start or visit_end > work_end:
+            raise AppointmentError(f"{staff.display_name} is not working at that time")
         busy = _staff_busy_windows(db, staff.id, branch_id, day)
         if any(b_start < visit_end and b_end > visit_start for b_start, b_end in busy):
             raise AppointmentConflictError()

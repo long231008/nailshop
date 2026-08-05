@@ -11,6 +11,7 @@ out against, and `planning_minutes` (the cautious any-tech hold).
 
 import math
 from datetime import date as date_type
+from datetime import datetime, time, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -18,7 +19,12 @@ from sqlalchemy.orm import Session
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.capability.infrastructure.models import StaffCapabilityModel
 from app.services.infrastructure.models import ServiceModel
-from app.shared.infrastructure.clock import now_utc
+from app.shared.infrastructure.clock import (
+    day_bounds_utc,
+    now_utc,
+    opening_window_utc,
+    shop_timezone,
+)
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
 GRID_MINUTES = 15
@@ -43,6 +49,48 @@ def is_available(staff: StaffModel, day: date_type) -> bool:
     if staff.status != StaffStatus.ACTIVE:
         return False
     return day.weekday() not in parse_days_off(staff.days_off)
+
+
+def working_window(staff: StaffModel, day: date_type) -> tuple[datetime, datetime]:
+    """The UTC window this technician is actually in on one local day.
+
+    Full time needs nothing set: in from opening, and staying to finish whoever
+    is in the chair. Closing time is not the end of this window - the shop lets
+    a visit start at the last booking time and run past close, and that rule is
+    enforced on the start, not here.
+
+    A part-timer's own hours are the exception, and they are hard: setting an
+    end is how the salon says this person goes home then, so nothing may be sold
+    or assigned that runs past it. Their start is clamped to opening, since
+    nobody works before the door opens.
+
+    The single gate for "when can this tech work", as is_available is the gate
+    for "which days".
+    """
+    open_utc, _close_utc = opening_window_utc(day)
+    _day_start, day_end = day_bounds_utc(day)
+    if staff.work_start_hour is None and staff.work_end_hour is None:
+        return open_utc, day_end
+
+    tz = shop_timezone()
+    start, end = open_utc, day_end
+    if staff.work_start_hour is not None:
+        start = max(
+            start,
+            datetime.combine(day, time(hour=staff.work_start_hour), tzinfo=tz).astimezone(
+                timezone.utc
+            ),
+        )
+    if staff.work_end_hour is not None:
+        end = min(
+            end,
+            datetime.combine(day, time(hour=staff.work_end_hour), tzinfo=tz).astimezone(
+                timezone.utc
+            ),
+        )
+    # Hours the wrong way round would silently mean "always in"; an empty window
+    # is the honest reading, and the admin form refuses to save one anyway.
+    return start, max(start, end)
 
 
 def load_matrix(db: Session) -> dict[UUID, dict[UUID, int]]:

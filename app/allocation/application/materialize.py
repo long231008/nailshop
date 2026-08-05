@@ -27,7 +27,7 @@ from app.availability.application.capacity import (
     matrix_configured_for,
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
-from app.capability.application.matrix import ceil_to_grid, load_matrix
+from app.capability.application.matrix import ceil_to_grid, load_matrix, working_window
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
@@ -166,6 +166,15 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     # a branch-wide lock blocks everyone. Without this, the allocator could
     # seat a customer inside a range the salon explicitly closed.
     lock_day_start, lock_day_end = day_bounds_utc(target_date)
+
+    # A part-timer is only in for part of the day. Blocking off the rest as if
+    # it were leave means every check downstream - the greedy pass, the repair
+    # walk, the week ledger - honours their hours without knowing about them.
+    for staff in staff_list:
+        work_start, work_end = working_window(staff, target_date)
+        fixed[staff.id].append((lock_day_start, work_start))
+        fixed[staff.id].append((work_end, lock_day_end))
+
     for lock in locks_overlapping(db, branch_id, lock_day_start, lock_day_end):
         if lock.staff_id is not None:
             if lock.staff_id in fixed:

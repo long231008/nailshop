@@ -50,6 +50,8 @@ def _matrix_response(db: Session) -> MatrixResponse:
                 display_name=t.display_name,
                 status=t.status.value,
                 days_off=t.days_off,
+                work_start_hour=t.work_start_hour,
+                work_end_hour=t.work_end_hour,
                 max_hours_week=t.max_hours_week,
             )
             for t in payload["staff"]
@@ -110,6 +112,8 @@ def put_matrix(
         if staff is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Staff not found")
         staff.days_off = staff_item.days_off
+        staff.work_start_hour = staff_item.work_start_hour
+        staff.work_end_hour = staff_item.work_end_hour
         staff.max_hours_week = staff_item.max_hours_week
 
     # 3. Replace the capability matrix (runs the on_capability_change checks).

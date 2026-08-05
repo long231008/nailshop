@@ -49,6 +49,11 @@ class StaffModel(Base):
     # Weekly days off as comma-separated weekday numbers (0=Monday .. 6=Sunday).
     # Feeds the capacity ledger: a day off removes the tech from that day's lanes.
     days_off: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    # Part-time hours, shop-local. Null on both means full time: the technician
+    # is in for the whole of opening, whatever the shop's hours are that day.
+    # Set them and the scheduler stops selling or assigning outside the window.
+    work_start_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    work_end_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_hours_week: Mapped[int] = mapped_column(Integer, nullable=False, default=40)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

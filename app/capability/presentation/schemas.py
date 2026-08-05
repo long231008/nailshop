@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MatrixServiceItem(BaseModel):
@@ -26,6 +26,9 @@ class MatrixStaffItem(BaseModel):
     display_name: str
     status: str
     days_off: str
+    # Null on both means full time - in for the whole of the shop's opening.
+    work_start_hour: int | None
+    work_end_hour: int | None
     max_hours_week: int
 
 
@@ -54,7 +57,20 @@ class ServiceUpsertItem(BaseModel):
 class StaffSettingsItem(BaseModel):
     id: UUID
     days_off: str = ""
+    # Part-time hours, shop-local. Leave both null for a full-timer.
+    work_start_hour: int | None = Field(default=None, ge=0, le=23)
+    work_end_hour: int | None = Field(default=None, ge=1, le=24)
     max_hours_week: int = Field(default=40, ge=0, le=80)
+
+    @model_validator(mode="after")
+    def hours_make_a_window(self) -> "StaffSettingsItem":
+        if (
+            self.work_start_hour is not None
+            and self.work_end_hour is not None
+            and self.work_end_hour <= self.work_start_hour
+        ):
+            raise ValueError("work_end_hour must be after work_start_hour")
+        return self
 
 
 class MatrixSaveRequest(BaseModel):

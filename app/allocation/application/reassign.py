@@ -24,7 +24,12 @@ from app.bookings.infrastructure.models import (
     BookingModel,
     BookingStatus,
 )
-from app.capability.application.matrix import ceil_to_grid, is_available, load_matrix
+from app.capability.application.matrix import (
+    ceil_to_grid,
+    is_available,
+    load_matrix,
+    working_window,
+)
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import shop_timezone
@@ -124,6 +129,10 @@ def reassign_leg(
             busy.append((lock.start_time, lock.end_time))
     # A leave window blocks the target tech just like a booking would.
     busy.extend(leaves_for_day(db, [staff.id], day).get(staff.id, []))
+    # So do the hours a part-timer is not in for.
+    work_start, work_end = working_window(staff, day)
+    if detail.start_time < work_start or hold_end > work_end:
+        raise ReassignNotAllowedError("That is outside the staff member's working hours")
     if any(b_start < hold_end and b_end > detail.start_time for b_start, b_end in busy):
         raise ReassignConflictError()
 

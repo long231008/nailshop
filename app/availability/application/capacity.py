@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.allocation.application.roster import expected_staff
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.branches.infrastructure.models import LocationModel
-from app.capability.application.matrix import ceil_to_grid, load_matrix
+from app.capability.application.matrix import ceil_to_grid, load_matrix, working_window
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import (
@@ -211,6 +211,10 @@ class CapacityLedger:
         self.staff_ids = [staff.id for staff in staff_list]
         self.skills = {staff.id: set(matrix.get(staff.id, {})) for staff in staff_list}
         self.leave = leaves_for_day(db, self.staff_ids, day)
+        # Part-timers are only in for part of the day, so the lanes they fill
+        # have to shrink with them - otherwise the shop sells a five o'clock
+        # nobody is left to work.
+        self.hours = {staff.id: working_window(staff, day) for staff in staff_list}
 
         branch = db.get(LocationModel, branch_id)
         self.resource_caps = branch_resource_caps(branch) if branch is not None else {}
@@ -231,15 +235,18 @@ class CapacityLedger:
         return not self.configured or leg["service_id"] in self.skills.get(staff_id, ())
 
     def _present(self, slot: datetime) -> list[UUID]:
-        """Technicians expected in and not on leave during this slot."""
+        """Technicians on the floor for this slot: rostered in, inside their own
+        working hours, and not on leave."""
         slot_end = slot + timedelta(minutes=GRID_MINUTES)
-        return [
-            staff_id
-            for staff_id in self.staff_ids
-            if not any(
-                start < slot_end and end > slot for start, end in self.leave.get(staff_id, ())
-            )
-        ]
+        present = []
+        for staff_id in self.staff_ids:
+            start, end = self.hours[staff_id]
+            if slot < start or slot_end > end:
+                continue
+            if any(a < slot_end and b > slot for a, b in self.leave.get(staff_id, ())):
+                continue
+            present.append(staff_id)
+        return present
 
     def _servable(self, slot: datetime, occupants: list[dict]) -> bool:
         pool = self._present(slot)
