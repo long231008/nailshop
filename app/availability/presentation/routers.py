@@ -24,6 +24,13 @@ def get_availability(
         default=None,
         description="Comma-separated service ids of the whole visit, in order",
     ),
+    extension_ids: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated length ids, positionally matching service_ids; "
+            "leave an entry empty for a service booked at its standard length"
+        ),
+    ),
     staff_id: UUID | None = Query(
         default=None,
         description=(
@@ -50,8 +57,25 @@ def get_availability(
             detail="Provide service_id or service_ids",
         )
 
+    lengths: list[UUID | None] | None = None
+    if extension_ids:
+        try:
+            lengths = [
+                UUID(part.strip()) if part.strip() else None for part in extension_ids.split(",")
+            ]
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="extension_ids must be comma-separated UUIDs",
+            )
+        if len(lengths) != len(ids):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="extension_ids must have one entry per service",
+            )
+
     try:
-        slots = find_available_slots(db, branch_id, ids, date)
+        slots = find_available_slots(db, branch_id, ids, date, lengths)
     except ServiceNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
     except BookingWindowClosedError as exc:

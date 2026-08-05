@@ -12,8 +12,9 @@ from app.branches.presentation.schemas import (
     BranchResponse,
     BranchServiceSummary,
     BranchUpdateRequest,
+    ServiceLengthSummary,
 )
-from app.services.infrastructure.models import ServiceModel
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import require_roles
 
@@ -33,7 +34,26 @@ def _branch_response(branch: LocationModel, services: list[BranchServiceSummary]
     )
 
 
-def _summarise(service: ServiceModel) -> BranchServiceSummary:
+def _lengths_by_service(db: Session) -> dict[UUID, list[ServiceLengthSummary]]:
+    """Length options grouped by service, shortest first, in one query."""
+    grouped: dict[UUID, list[ServiceLengthSummary]] = {}
+    for extension in (
+        db.query(ServiceExtensionModel).order_by(ServiceExtensionModel.extra_duration_min).all()
+    ):
+        grouped.setdefault(extension.service_id, []).append(
+            ServiceLengthSummary(
+                id=extension.id,
+                name=extension.name,
+                extra_price=float(extension.extra_price),
+                extra_duration_min=extension.extra_duration_min,
+            )
+        )
+    return grouped
+
+
+def _summarise(
+    service: ServiceModel, lengths: dict[UUID, list[ServiceLengthSummary]]
+) -> BranchServiceSummary:
     return BranchServiceSummary(
         id=service.id,
         name=service.name,
@@ -41,6 +61,7 @@ def _summarise(service: ServiceModel) -> BranchServiceSummary:
         description=service.description,
         duration_min=service.duration_min,
         base_price=float(service.base_price),
+        lengths=lengths.get(service.id, []),
     )
 
 
@@ -69,11 +90,12 @@ def create_branch(
 def list_branches(db: Session = Depends(get_db)) -> list[BranchResponse]:
     branches = db.query(LocationModel).all()
     services = db.query(ServiceModel).all()
+    lengths = _lengths_by_service(db)
 
     services_by_branch: dict = defaultdict(list)
     global_services = []
     for service in services:
-        summary = _summarise(service)
+        summary = _summarise(service, lengths)
         if service.branch_id is None:
             global_services.append(summary)
         else:
@@ -97,7 +119,8 @@ def get_branch(branch_id: UUID, db: Session = Depends(get_db)) -> BranchResponse
         .all()
     )
 
-    return _branch_response(branch, [_summarise(s) for s in services])
+    lengths = _lengths_by_service(db)
+    return _branch_response(branch, [_summarise(s, lengths) for s in services])
 
 
 @router.patch("/{branch_id}", response_model=BranchResponse)
@@ -123,4 +146,5 @@ def update_branch(
         .all()
     )
 
-    return _branch_response(branch, [_summarise(s) for s in services])
+    lengths = _lengths_by_service(db)
+    return _branch_response(branch, [_summarise(s, lengths) for s in services])

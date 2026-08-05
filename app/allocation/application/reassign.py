@@ -26,7 +26,7 @@ from app.bookings.infrastructure.models import (
 )
 from app.capability.application.matrix import ceil_to_grid, is_available, load_matrix
 from app.leaves.application.leaves import leaves_for_day
-from app.services.infrastructure.models import ServiceModel
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import shop_timezone
 from app.slot_locks.application.locks import locks_overlapping
 from app.staff.infrastructure.models import StaffModel, StaffStatus
@@ -87,7 +87,13 @@ def reassign_leg(
             raise ReassignNotAllowedError("The staff member does not offer this service")
         minutes = service.duration_min  # matrix not filled in yet
 
-    real = ceil_to_grid(minutes)
+    # A chosen length is part of the leg, not of the technician's own speed.
+    extra = 0
+    if detail.service_extension_id is not None:
+        extension = db.get(ServiceExtensionModel, detail.service_extension_id)
+        extra = extension.extra_duration_min if extension is not None else 0
+
+    real = ceil_to_grid(minutes + extra)
     committed = _week_assigned_minutes(db, [staff.id], day).get(staff.id, 0)
     if committed + real > staff.max_hours_week * 60:
         raise ReassignNotAllowedError("The staff member has no hours left that week")

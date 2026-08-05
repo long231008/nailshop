@@ -19,7 +19,8 @@ from app.availability.application.capacity import (
     existing_legs,
     planning_minutes,
 )
-from app.services.infrastructure.models import ServiceModel
+from app.capability.application.matrix import ceil_to_grid
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import last_booking_utc, opening_window_utc
 from app.slot_locks.application.locks import locks_overlapping
 
@@ -41,18 +42,23 @@ def build_visit_legs(
     branch_id: UUID,
     services: list[ServiceModel],
     day: date_type,
+    extra_minutes: list[int] | None = None,
 ) -> list[dict] | None:
     """The visit as sequential legs with planned durations (grid-snapped).
 
-    Every leg holds the cautious planning duration (slowest eligible tech).
-    None = not sellable that day.
+    Every leg holds the cautious planning duration (slowest eligible tech), plus
+    the minutes of the length chosen for it, so the times offered are the times
+    that visit can really be booked at. None = not sellable that day.
     """
     legs = []
     offset = 0
-    for service in services:
+    for index, service in enumerate(services):
         minutes = planning_minutes(db, branch_id, service.id, day)
         if minutes is None:
             return None  # nobody expected that day can do it - don't sell
+        extra = extra_minutes[index] if extra_minutes else 0
+        if extra:
+            minutes = ceil_to_grid(minutes + extra)
         legs.append(
             {
                 "service_id": service.id,
@@ -90,6 +96,7 @@ def find_available_slots(
     branch_id: UUID,
     service_ids: list[UUID],
     target_date: date_type,
+    extension_ids: list[UUID | None] | None = None,
 ) -> list[dict]:
     services = [db.get(ServiceModel, service_id) for service_id in service_ids]
     if any(service is None for service in services):
@@ -99,7 +106,24 @@ def find_available_slots(
     if state != BookingWindow.OPEN:
         raise BookingWindowClosedError(state)
 
-    legs = build_visit_legs(db, branch_id, services, target_date)
+    # A length chosen for a service makes its leg longer, so the search has to
+    # know about it or it would offer times the booking then cannot take.
+    extra_minutes = None
+    if extension_ids and any(extension_ids):
+        chosen = {
+            extension.id: extension
+            for extension in db.query(ServiceExtensionModel)
+            .filter(ServiceExtensionModel.id.in_([e for e in extension_ids if e]))
+            .all()
+        }
+        extra_minutes = []
+        for index, extension_id in enumerate(extension_ids):
+            extension = chosen.get(extension_id) if extension_id else None
+            if extension is not None and extension.service_id != services[index].id:
+                raise ServiceNotFoundError()
+            extra_minutes.append(extension.extra_duration_min if extension else 0)
+
+    legs = build_visit_legs(db, branch_id, services, target_date, extra_minutes)
     if legs is None:
         return []
     total_minutes = legs[-1]["offset_min"] + legs[-1]["duration_min"]

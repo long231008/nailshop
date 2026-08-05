@@ -22,6 +22,13 @@ class BranchUpdateRequest(BaseModel):
     massage_beds: int | None = Field(default=None, ge=0)
 
 
+class ServiceLengthSummary(BaseModel):
+    id: UUID
+    name: str
+    extra_price: float
+    extra_duration_min: int
+
+
 class BranchServiceSummary(BaseModel):
     id: UUID
     name: str
@@ -29,6 +36,8 @@ class BranchServiceSummary(BaseModel):
     description: str | None
     duration_min: int
     base_price: float
+    # Length options (e.g. a longer set): empty for services sold one way only.
+    lengths: list[ServiceLengthSummary] = []
 
 
 class BranchResponse(BaseModel):

@@ -29,7 +29,7 @@ from app.availability.application.capacity import (
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
 from app.capability.application.matrix import ceil_to_grid, load_matrix
 from app.leaves.application.leaves import leaves_for_day
-from app.services.infrastructure.models import ServiceModel
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
 from app.slot_locks.application.locks import locks_overlapping
 
@@ -49,6 +49,25 @@ def _day_details(db: Session, branch_id: UUID, target_date: date_type):
         .order_by(BookingDetailModel.start_time)
         .all()
     )
+
+
+def _length_minutes(db: Session, details) -> dict[UUID, int]:
+    """detail_id -> extra minutes its chosen length adds.
+
+    A long set is longer for whoever does it, so the minutes belong to the leg
+    on top of the technician's own time for the service. Without this the
+    nightly run would recompute the leg from the capability cell alone and
+    silently shrink a long set back to a short one.
+    """
+    extension_ids = {d.service_extension_id for d in details if d.service_extension_id}
+    if not extension_ids:
+        return {}
+    extra = dict(
+        db.query(ServiceExtensionModel.id, ServiceExtensionModel.extra_duration_min)
+        .filter(ServiceExtensionModel.id.in_(extension_ids))
+        .all()
+    )
+    return {d.id: extra.get(d.service_extension_id, 0) for d in details if d.service_extension_id}
 
 
 def _week_assigned_minutes(db: Session, staff_ids: list[UUID], day: date_type) -> dict[UUID, int]:
@@ -108,6 +127,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     matrix = load_matrix(db)
     configured = matrix_configured_for(staff_list, matrix)
     rows = _day_details(db, branch_id, target_date)
+    length_minutes = _length_minutes(db, [detail for detail, _b, _s in rows])
 
     # The owner's weekly ceiling per tech (fix #4, restored): assigning past it
     # is refused here, exactly where assignment happens now.
@@ -162,6 +182,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         booking_staff = {
             d.staff_id for d, b, _s in rows if b.id == booking.id and d.staff_id is not None
         }
+        extra = length_minutes.get(detail.id, 0)
         candidates = []
         for staff in staff_list:
             minutes = matrix.get(staff.id, {}).get(service.id)
@@ -169,7 +190,7 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
                 if configured:
                     continue
                 minutes = service.duration_min  # matrix not filled in yet
-            real = ceil_to_grid(minutes)
+            real = ceil_to_grid(minutes + extra)
             if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
                 continue  # no hours left that week
             real_end = detail.start_time + timedelta(minutes=real)

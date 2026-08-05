@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.bookings.infrastructure.models import BookingDetailModel
 from app.branches.infrastructure.models import LocationModel
 from app.services.application.lengths import ServiceNotFoundError, add_service_length
-from app.services.infrastructure.models import ServiceModel
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.services.presentation.schemas import (
     ServiceCreateRequest,
     ServiceLengthCreateRequest,
@@ -129,3 +130,60 @@ def create_service_length(
         extra_price=float(extension.extra_price),
         extra_duration_min=extension.extra_duration_min,
     )
+
+
+@router.get("/{service_id}/lengths", response_model=list[ServiceLengthResponse])
+def list_service_lengths(
+    service_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[ServiceLengthResponse]:
+    """The length options a service offers - public, so the booking page can
+    show them next to the service."""
+    extensions = (
+        db.query(ServiceExtensionModel)
+        .filter(ServiceExtensionModel.service_id == service_id)
+        .order_by(ServiceExtensionModel.extra_duration_min)
+        .all()
+    )
+    return [
+        ServiceLengthResponse(
+            id=extension.id,
+            service_id=extension.service_id,
+            name=extension.name,
+            extra_price=float(extension.extra_price),
+            extra_duration_min=extension.extra_duration_min,
+        )
+        for extension in extensions
+    ]
+
+
+@router.delete("/lengths/{length_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_service_length(
+    length_id: UUID,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> None:
+    """Take a length off the menu.
+
+    Refused once a booking has chosen it: the nightly run reads the length back
+    to work out how long that leg really needs, so detaching it would quietly
+    shrink a long set to a short one on the day.
+    """
+    extension = db.get(ServiceExtensionModel, length_id)
+    if extension is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Length not found")
+
+    in_use = (
+        db.query(BookingDetailModel.id)
+        .filter(BookingDetailModel.service_extension_id == length_id)
+        .first()
+        is not None
+    )
+    if in_use:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Bookings have been made with this length, so it cannot be removed",
+        )
+
+    db.delete(extension)
+    db.commit()
