@@ -4,10 +4,40 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger("app.request")
+
+HEALTH_PATH = "/health"
+
+
+class HealthExemptTrustedHostMiddleware:
+    """The host allow-list, applied everywhere except the health endpoint.
+
+    A load balancer health-checks a container by dialling its address, so the
+    probe arrives as `Host: 10.0.1.23:8001` - a host ALLOWED_HOSTS can never
+    list, because the address is handed out at deploy time. Guarding /health
+    with it fails every probe, the target never turns healthy, and the deploy
+    rolls back; an AWS target group cannot send a custom Host header at all,
+    so there is no way to configure around it.
+
+    /health answers a constant body and builds no URLs, so a forged Host has
+    nothing to poison there. Every other path keeps the full check, which is
+    where host-header injection would actually do damage.
+    """
+
+    def __init__(self, app: ASGIApp, allowed_hosts: list[str]) -> None:
+        self.app = app
+        self.guarded = TrustedHostMiddleware(app, allowed_hosts=allowed_hosts)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("path") == HEALTH_PATH:
+            await self.app(scope, receive, send)
+            return
+        await self.guarded(scope, receive, send)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):

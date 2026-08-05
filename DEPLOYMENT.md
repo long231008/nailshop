@@ -47,11 +47,16 @@ host-header injection, where a request claiming `Host: evil.example` makes the
 app generate links pointing at the attacker's domain. List only your API's
 domain(s).
 
-Anything that health-checks the API must send one of these hosts. Kubernetes
-probes dial the pod IP, so `k8s/deployment.yaml` sets an explicit `Host`
-header on all three probes — without it every probe gets `400 Invalid host
-header` and the pod never becomes ready. Do the same for any external
-uptime monitor.
+`GET /health` is the one exception: it is exempt from the host allow-list, so a
+health check works no matter which address it dials. That matters because
+load balancers probe the container by IP — a Kubernetes kubelet dials the pod
+IP, and an AWS target group cannot send a custom `Host` header at all, so a
+guarded `/health` would fail every probe and the deployment would never turn
+healthy. The endpoint answers a constant body and builds no URLs, so there is
+nothing a forged host could poison there.
+
+Every other path still requires a listed host, so point uptime monitors that
+hit real endpoints at your API domain, not its IP.
 
 The frontend needs its own `.env` at build time:
 

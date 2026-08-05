@@ -28,9 +28,9 @@ spec:
                 name: nailshop-config
             - secretRef:
                 name: nailshop-secrets
-          # Every probe must send the Host header the app answers to: kubelet
-          # dials the pod IP, and ALLOWED_HOSTS (nailshop-config) makes the app
-          # reject any other Host with 400, which would fail all three probes.
+          # Probes dial the pod IP, so their Host header is an address
+          # ALLOWED_HOSTS cannot list; /health is exempt from the host guard for
+          # exactly that reason, so no Host header has to be set here.
           #
           # The container runs "alembic upgrade head" before uvicorn; the
           # startup probe gives migrations up to ~150s before liveness kicks in.
@@ -38,27 +38,18 @@ spec:
             httpGet:
               path: /health
               port: 8001
-              httpHeaders:
-                - name: Host
-                  value: api.nailzinc.co.uk
             periodSeconds: 5
             failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /health
               port: 8001
-              httpHeaders:
-                - name: Host
-                  value: api.nailzinc.co.uk
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8001
-              httpHeaders:
-                - name: Host
-                  value: api.nailzinc.co.uk
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:

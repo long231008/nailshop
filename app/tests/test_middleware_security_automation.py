@@ -54,3 +54,16 @@ def test_client_ip_extraction_with_trust_proxy(monkeypatch):
     ip = client_ip(req)
     # When TRUST_PROXY_HEADERS is True, the client IP is extracted from X-Forwarded-For
     assert ip == "203.0.113.195"
+
+
+def test_health_answers_a_load_balancer_probe_but_other_paths_do_not(client):
+    """A load balancer dials the container's address, so the probe's Host is an
+    IP that ALLOWED_HOSTS cannot list. /health must answer it anyway, or the
+    target never turns healthy - while every other path keeps the host guard."""
+    probe = client.get("/health", headers={"Host": "10.0.1.23:8001"})
+    assert probe.status_code == 200
+    assert probe.json() == {"status": "ok"}
+
+    # The guard is still on everywhere else: a forged host is refused.
+    forged = client.get("/app/branches", headers={"Host": "evil.example"})
+    assert forged.status_code == 400

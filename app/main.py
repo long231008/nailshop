@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.admin.presentation.routers import router as admin_router
 from app.allocation.application.nightly import run_nightly_allocation
@@ -36,6 +35,7 @@ from app.shared.infrastructure.database import models  # noqa: F401 (registers a
 from app.shared.infrastructure.database.session import SessionLocal
 from app.shared.infrastructure.rate_limit import limiter, rate_limit_exceeded_handler
 from app.shared.presentation.middleware import (
+    HealthExemptTrustedHostMiddleware,
     RequestLoggingMiddleware,
     SecurityHeadersMiddleware,
 )
@@ -137,7 +137,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # CORS must sit OUTSIDE SlowAPI so a middleware-produced 429 still carries
 # CORS headers (a browser cannot read the error otherwise) and preflight
 # OPTIONS requests do not consume rate-limit budget.
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list)
+app.add_middleware(HealthExemptTrustedHostMiddleware, allowed_hosts=settings.allowed_hosts_list)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
