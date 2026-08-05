@@ -196,6 +196,7 @@ def create_booking(
             {
                 "service_id": service.id,
                 "skill_group": service.skill_group,
+                "resource": service.resource,
                 "start": start_time,
                 "end": end_time + timedelta(minutes=service.buffer_after_min),
             }

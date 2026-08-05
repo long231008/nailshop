@@ -3,7 +3,7 @@ from datetime import date as date_
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, Integer, Numeric
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -54,6 +54,10 @@ class BookingModel(Base):
     # When the booking was approved; the deposit window is measured from here.
     # Kept in the database so a Redis wipe cannot silently cancel paid-for slots.
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A booking the salon entered itself at the desk (walk-in or phone), as
+    # opposed to one a customer made online. Staff-created bookings are already
+    # agreed in person, so they sit on the day grid without a deposit.
+    staff_created: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

@@ -1,20 +1,53 @@
 from datetime import date as date_type
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.domain.value_object import UserRole
+from app.bookings.application.cancel import cancel_booking_by_salon
+from app.bookings.application.exceptions import BookingNotFoundError, InvalidBookingStateError
+from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
+from app.notification.application.notify import notify_booking_cancelled_by_salon
+from app.notification.domain.sender import NotificationSender
+from app.notification.infrastructure.senders import get_notification_sender
 from app.schedule.application.daily import get_daily_schedule, get_upcoming_pending
+from app.schedule.application.manage import (
+    AppointmentConflictError,
+    AppointmentError,
+    AppointmentNotFoundError,
+    add_appointment,
+    reschedule_appointment,
+)
 from app.schedule.presentation.schemas import (
+    AddAppointmentRequest,
+    AppointmentMutationResponse,
     DailyAppointment,
     DailyScheduleResponse,
     PendingAppointment,
+    RescheduleAppointmentRequest,
 )
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
+
+
+def _mutation_response(db: Session, booking: BookingModel) -> AppointmentMutationResponse:
+    first = (
+        db.query(BookingDetailModel)
+        .filter(BookingDetailModel.booking_id == booking.id)
+        .order_by(BookingDetailModel.start_time)
+        .first()
+    )
+    return AppointmentMutationResponse(
+        booking_id=booking.id,
+        status=booking.status.value,
+        booking_date=booking.booking_date,
+        staff_id=first.staff_id if first else None,
+        start_time=first.start_time,
+        end_time=first.end_time,
+    )
 
 
 @router.get("", response_model=DailyScheduleResponse)
@@ -53,3 +86,77 @@ def upcoming_pending(
     """All future booking requests needing action, across every date."""
     pending = get_upcoming_pending(db, branch_id)[offset : offset + limit]
     return [PendingAppointment(**p) for p in pending]
+
+
+@router.post(
+    "/appointments",
+    response_model=AppointmentMutationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_schedule_appointment(
+    payload: AddAppointmentRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
+) -> AppointmentMutationResponse:
+    """The desk enters a walk-in or phone booking straight onto the grid."""
+    try:
+        booking = add_appointment(
+            db,
+            current_user.id,
+            payload.branch_id,
+            payload.service_ids,
+            payload.start_time,
+            payload.staff_id,
+            payload.customer_id,
+            payload.customer_phone,
+            payload.customer_name,
+        )
+    except AppointmentError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except AppointmentConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That technician is not free at this time",
+        )
+    return _mutation_response(db, booking)
+
+
+@router.patch("/appointments/{booking_id}", response_model=AppointmentMutationResponse)
+def move_schedule_appointment(
+    booking_id: UUID,
+    payload: RescheduleAppointmentRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
+) -> AppointmentMutationResponse:
+    """Move an appointment to a new start time."""
+    try:
+        booking = reschedule_appointment(db, current_user.id, booking_id, payload.new_start_time)
+    except AppointmentNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except AppointmentError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except AppointmentConflictError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That technician is not free at the new time",
+        )
+    return _mutation_response(db, booking)
+
+
+@router.delete("/appointments/{booking_id}", response_model=AppointmentMutationResponse)
+def delete_schedule_appointment(
+    booking_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.STAFF)),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
+) -> AppointmentMutationResponse:
+    """Remove an appointment from the book (cancels it and tells the customer)."""
+    try:
+        booking = cancel_booking_by_salon(db, booking_id, current_user.id)
+    except BookingNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    except InvalidBookingStateError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    notify_booking_cancelled_by_salon(notification_sender, db, booking.customer_id)
+    return _mutation_response(db, booking)

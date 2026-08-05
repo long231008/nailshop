@@ -24,6 +24,7 @@ from app.capability.presentation.routers import router as capability_router
 from app.custom_designs.presentation.routers import router as custom_designs_router
 from app.dashboard.presentation.router import router as dashboard_router
 from app.discounts.presentation.routers import router as discounts_router
+from app.leaves.presentation.routers import router as leaves_router
 from app.me.presentation.routers import router as me_router
 from app.notification.infrastructure.senders import get_notification_sender
 from app.schedule.presentation.routers import router as schedule_router
@@ -159,6 +160,7 @@ app.include_router(branches_router, prefix="/app")
 app.include_router(services_router, prefix="/app")
 app.include_router(shifts_router, prefix="/app")
 app.include_router(slot_locks_router, prefix="/app")
+app.include_router(leaves_router, prefix="/app")
 app.include_router(schedule_router, prefix="/app")
 app.include_router(discounts_router, prefix="/app")
 app.include_router(availability_router, prefix="/app")

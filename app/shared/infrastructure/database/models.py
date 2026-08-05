@@ -7,6 +7,7 @@ from app.branches.infrastructure.models import LocationModel  # noqa: F401
 from app.capability.infrastructure.models import StaffCapabilityModel  # noqa: F401
 from app.custom_designs.infrastructure.models import CustomDesignModel  # noqa: F401
 from app.discounts.infrastructure.models import DiscountModel, DiscountType  # noqa: F401
+from app.leaves.infrastructure.models import StaffLeaveModel  # noqa: F401
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel  # noqa: F401
 from app.shifts.infrastructure.models import StaffRosterModel  # noqa: F401
 from app.slot_locks.infrastructure.models import SlotLockModel  # noqa: F401

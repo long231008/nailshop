@@ -96,8 +96,12 @@ def get_daily_schedule(
             "design_description": design.description if design else None,
         }
 
-        if booking.status in (BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED) or (
-            booking.status == BookingStatus.APPROVED and booking.id in paid_ids
+        if (
+            booking.status in (BookingStatus.IN_PROGRESS, BookingStatus.COMPLETED)
+            or (booking.status == BookingStatus.APPROVED and booking.id in paid_ids)
+            # A booking the desk entered itself is already agreed in person, so it
+            # sits on the grid without waiting for an online deposit.
+            or (booking.status == BookingStatus.APPROVED and booking.staff_created)
         ):
             appointments.append(item)
         elif booking.status == BookingStatus.APPROVED:
@@ -142,8 +146,10 @@ def get_upcoming_pending(db: Session, branch_id: UUID | None) -> list[dict]:
 
     pending: list[dict] = []
     for detail, booking, service_name, staff, customer, design in rows:
-        if booking.status == BookingStatus.APPROVED and booking.id in paid_ids:
-            continue  # secured - it lives on the grid, not here
+        if booking.status == BookingStatus.APPROVED and (
+            booking.id in paid_ids or booking.staff_created
+        ):
+            continue  # secured (deposit paid or desk-entered) - it lives on the grid
         customer_name = " ".join(part for part in (customer.first_name, customer.surname) if part)
         pending.append(
             {

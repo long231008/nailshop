@@ -25,6 +25,7 @@ from app.bookings.infrastructure.models import (
 )
 from app.branches.infrastructure.models import LocationModel
 from app.capability.application.matrix import is_available, load_matrix
+from app.leaves.application.leaves import full_day_leave_staff
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc
 from app.staff.infrastructure.models import StaffModel, StaffStatus
@@ -203,9 +204,13 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
         .order_by(StaffModel.created_at, StaffModel.id)
         .all()
     )
+    # A tech off for the whole day is never placed, so Step A does not hand a
+    # branch demand its absent technician cannot serve. Partial leave still
+    # places them - the capacity ledger and materialize handle the hours off.
+    on_leave = full_day_leave_staff(db, day)
     unplaced = []
     for staff in active:
-        if not is_available(staff, day):
+        if not is_available(staff, day) or staff.id in on_leave:
             continue
         if staff.id in anchored:
             place(staff, anchored[staff.id])
