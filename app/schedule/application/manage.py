@@ -15,6 +15,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.allocation.application.materialize import _week_assigned_minutes
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
@@ -173,6 +174,8 @@ def add_appointment(
                 "resource": service.resource,
                 "start": cursor,
                 "end": end_time + timedelta(minutes=service.buffer_after_min),
+                # The work itself, buffer excluded - what the hours ledger counts.
+                "service_end": end_time,
             }
         )
         prepared.append(
@@ -196,6 +199,13 @@ def add_appointment(
         work_start, work_end = working_window(staff, day)
         if visit_start < work_start or visit_end > work_end:
             raise AppointmentError(f"{staff.display_name} is not working at that time")
+        # Named, so the weekly ceiling is this one person's, not the team pool's.
+        wanted = sum(
+            int((leg["service_end"] - leg["start"]).total_seconds() // 60) for leg in capacity_legs
+        )
+        committed = _week_assigned_minutes(db, [staff.id], day).get(staff.id, 0)
+        if committed + wanted > staff.max_hours_week * 60:
+            raise AppointmentError(f"{staff.display_name} has no hours left that week")
         busy = _staff_busy_windows(db, staff.id, branch_id, day)
         if any(b_start < visit_end and b_end > visit_start for b_start, b_end in busy):
             raise AppointmentConflictError()

@@ -21,6 +21,7 @@ from datetime import date as date_type
 from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.allocation.application.roster import expected_staff
@@ -215,6 +216,7 @@ class CapacityLedger:
         # have to shrink with them - otherwise the shop sells a five o'clock
         # nobody is left to work.
         self.hours = {staff.id: working_window(staff, day) for staff in staff_list}
+        self.week_free, self.week_owed = week_hours_budget(db, staff_list, branch_id, day)
 
         branch = db.get(LocationModel, branch_id)
         self.resource_caps = branch_resource_caps(branch) if branch is not None else {}
@@ -238,15 +240,26 @@ class CapacityLedger:
         """Technicians on the floor for this slot: rostered in, inside their own
         working hours, and not on leave."""
         slot_end = slot + timedelta(minutes=GRID_MINUTES)
-        present = []
-        for staff_id in self.staff_ids:
-            start, end = self.hours[staff_id]
-            if slot < start or slot_end > end:
-                continue
-            if any(a < slot_end and b > slot for a, b in self.leave.get(staff_id, ())):
-                continue
-            present.append(staff_id)
-        return present
+        return [s for s in self.staff_ids if self._free_between(s, slot, slot_end)]
+
+    def _free_between(self, staff_id: UUID, start: datetime, end: datetime) -> bool:
+        work_start, work_end = self.hours[staff_id]
+        if start < work_start or end > work_end:
+            return False
+        return not any(a < end and b > start for a, b in self.leave.get(staff_id, ()))
+
+    def _can_serve(self, staff_id: UUID, leg: dict) -> bool:
+        """Could this technician take this leg - the whole of it?
+
+        Whoever gets a leg keeps it from start to finish, so being on the floor
+        for the slot being checked is not enough: an hour off in the middle, or
+        a shift that ends before the leg does, rules them out for all of it.
+        Checking only the slot let the matching hand one leg to two different
+        people in two different slots, and sell a day on the strength of it.
+        """
+        return self._can_do(staff_id, leg) and self._free_between(
+            staff_id, leg["start"], leg["end"]
+        )
 
     def _servable(self, slot: datetime, occupants: list[dict]) -> bool:
         pool = self._present(slot)
@@ -262,7 +275,7 @@ class CapacityLedger:
             # outside this plan (a manual move), so it holds nobody here.
         if not open_legs:
             return True
-        return _shareable(open_legs, [s for s in pool if s in free_pool], self._can_do)
+        return _shareable(open_legs, [s for s in pool if s in free_pool], self._can_serve)
 
     def _resource_of(self, leg: dict) -> str | None:
         """The tracked physical resource a leg needs, or None when its resource
@@ -296,6 +309,16 @@ class CapacityLedger:
         Legs of the same proposal count against each other too: two steps of one
         visit that overlap need two technicians, the same as two customers.
         """
+        # Hours the team has left this week, against the work it already owes
+        # plus this visit. A day can look perfectly staffable slot by slot and
+        # still be work nobody has the hours left to do.
+        wanted = sum(
+            int((leg.get("service_end", leg["end"]) - leg["start"]).total_seconds() // 60)
+            for leg in legs
+        )
+        if self.week_owed + wanted > self.week_free:
+            return False
+
         touched: dict[datetime, list[dict]] = {}
         pending_resource: dict[tuple[str, datetime], int] = {}
         for leg in legs:
@@ -315,6 +338,65 @@ class CapacityLedger:
             self._servable(slot, self.booked.get(slot, []) + pending)
             for slot, pending in touched.items()
         )
+
+
+def week_hours_budget(
+    db: Session, staff_list: list, branch_id: UUID, day: date_type
+) -> tuple[int, int]:
+    """(minutes still available across the team this week, minutes already owed).
+
+    max_hours_week is a ceiling the nightly run enforces, but selling never knew
+    about it, so the salon could take four bookings a technician has hours for
+    two of and find out at 21:00.
+
+    Owed work cannot be charged to anyone yet - a leg with no technician has not
+    been given to one - so this is a pool rather than a per-person count: all
+    the work the week has taken on must fit in all the hours the team has left.
+    That is a weaker test than the nightly run's per-person one, but it is a
+    true one, and it is the part selling can know.
+
+    Scoped to this branch, as the ledger is. A technician who floats between
+    branches mid-week has hours counted against them everywhere (their ceiling
+    is theirs, not the shop's) but only this branch's owed work counted here.
+    """
+    if not staff_list:
+        return 0, 0
+    week_start = day - timedelta(days=day.weekday())
+    week_end = week_start + timedelta(days=7)
+    staff_ids = [staff.id for staff in staff_list]
+
+    committed = dict(
+        db.query(
+            BookingDetailModel.staff_id,
+            func.coalesce(func.sum(BookingDetailModel.duration_min), 0),
+        )
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .filter(
+            BookingDetailModel.staff_id.in_(staff_ids),
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingModel.booking_date >= week_start,
+            BookingModel.booking_date < week_end,
+        )
+        .group_by(BookingDetailModel.staff_id)
+        .all()
+    )
+    free = sum(
+        max(0, staff.max_hours_week * 60 - int(committed.get(staff.id, 0))) for staff in staff_list
+    )
+
+    owed = (
+        db.query(func.coalesce(func.sum(BookingDetailModel.duration_min), 0))
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .filter(
+            BookingDetailModel.staff_id.is_(None),
+            BookingModel.branch_id == branch_id,
+            BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
+            BookingModel.booking_date >= week_start,
+            BookingModel.booking_date < week_end,
+        )
+        .scalar()
+    )
+    return free, int(owed or 0)
 
 
 def staff_timeline_busy(db: Session, staff_id: UUID, day: date_type) -> list[tuple]:

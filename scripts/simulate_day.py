@@ -11,12 +11,20 @@ through the real booking path - the same capacity, resource and matching checks
 a customer would hit. Then it closes the day (Step A + materialize) and prints
 each technician's timeline, the fairness ledger, and anything left unassigned.
 
---fuzz runs random salons instead, checking after each one that no technician
-is double-booked, seated during their own leave, given work they cannot do, or
-put on a chair the branch does not have - and that nothing was left unassigned
-when a complete assignment existed. It stops at the first day that breaks one
-and prints the seed. Seeds 23, 28, 33 and 93 each found a real allocator bug;
-they make a decent regression check after touching the scheduler.
+--fuzz runs random salons instead - part-timers, short weeks, busy days -
+checking after each one that no technician is double-booked, seated during
+their own leave or outside their hours, given work they cannot do, worked past
+their week, or put on a chair the branch has not got; and that every leg sold
+has a technician. It stops at the first day that breaks one and prints a seed
+to reproduce with.
+
+KNOWN OPEN: seeds 93 and 101 (and 13 with everyone full time) report legs sold
+that nobody could ever have worked. The capacity ledger matches technicians to
+legs one 15-minute slot at a time, and each slot is matched independently, so a
+leg can be covered by one technician in one slot and another in the next - a
+day every slot can staff, that no single assignment can. Leave or a shift
+ending mid-leg is what makes it reachable. Selling exactly would mean solving
+the whole day on the booking path, not per slot; this is not that.
 
 Everything it creates is named "Simulator", so --reset removes it and nothing
 else. It never touches data you made yourself.
@@ -42,12 +50,12 @@ from app.bookings.application.create import create_booking
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
 from app.bookings.presentation.schemas import BookingCreateRequest, BookingItemRequest
 from app.branches.infrastructure.models import LocationModel
-from app.capability.application.matrix import ceil_to_grid
+from app.capability.application.matrix import ceil_to_grid, working_window
 from app.capability.infrastructure.models import StaffCapabilityModel
 from app.leaves.application.leaves import leaves_for_day
 from app.leaves.infrastructure.models import StaffLeaveModel
 from app.services.infrastructure.models import ServiceModel
-from app.shared.infrastructure.clock import shop_timezone, today_in_shop_tz
+from app.shared.infrastructure.clock import day_bounds_utc, shop_timezone, today_in_shop_tz
 from app.shared.infrastructure.database.session import SessionLocal
 from app.staff.infrastructure.models import StaffModel
 
@@ -160,7 +168,10 @@ def reset(db, quiet=False) -> None:
         print("Simulator data removed.")
 
 
-def build_salon(db, technicians=TECHNICIANS, resources=RESOURCES):
+def build_salon(db, technicians=TECHNICIANS, resources=RESOURCES, contracts=None):
+    """contracts[name] = (work_start_hour, work_end_hour, max_hours_week); a name
+    left out is a full-timer on the default weekly ceiling."""
+    contracts = contracts or {}
     branch = LocationModel(name=BRANCH_NAME, address="1 Simulation Street", **resources)
     db.add(branch)
     db.flush()
@@ -191,7 +202,15 @@ def build_salon(db, technicians=TECHNICIANS, resources=RESOURCES):
         )
         db.add(user)
         db.flush()
-        member = StaffModel(user_id=user.id, branch_id=branch.id, display_name=display_name)
+        start_hour, end_hour, week_cap = contracts.get(display_name, (None, None, 40))
+        member = StaffModel(
+            user_id=user.id,
+            branch_id=branch.id,
+            display_name=display_name,
+            work_start_hour=start_hour,
+            work_end_hour=end_hour,
+            max_hours_week=week_cap,
+        )
         db.add(member)
         db.flush()
         for service_name, real_minutes in cells.items():
@@ -290,12 +309,16 @@ def _sold_legs(db, branch):
     )
 
 
-def _complete_assignment_exists(rows, staff_ids, minutes, leave, budget=200_000):
+def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=200_000):
     """Could every sold leg have had a technician? Backtracking over the same
-    rules materialize_day uses - capability, real per-tech minutes, buffers and
-    leave. Resource caps are not re-checked here: the legs are already sold, so
-    who performs them is the only open question."""
+    rules materialize_day uses - capability, real per-tech minutes, buffers,
+    leave, working hours and the weekly ceiling. Resource caps are not re-checked
+    here: the legs are already sold, so who performs them is the only question.
+
+    Every rule the allocator obeys has to be in here too, or a day it refused
+    for a good reason reads as a day it gave up on."""
     timelines = {staff_id: [] for staff_id in staff_ids}
+    spent = dict.fromkeys(staff_ids, 0)
     steps = [budget]
 
     def seat(index):
@@ -309,15 +332,20 @@ def _complete_assignment_exists(rows, staff_ids, minutes, leave, budget=200_000)
             real = minutes.get((staff_id, service.id))
             if real is None:
                 continue
-            end = detail.start_time + timedelta(minutes=ceil_to_grid(real))
+            real = ceil_to_grid(real)
+            if spent[staff_id] + real > caps.get(staff_id, 0):
+                continue
+            end = detail.start_time + timedelta(minutes=real)
             hold = end + timedelta(minutes=service.buffer_after_min)
-            busy = timelines[staff_id] + leave.get(staff_id, [])
+            busy = timelines[staff_id] + blocked.get(staff_id, [])
             if not all(b <= detail.start_time or a >= hold for a, b in busy):
                 continue
             timelines[staff_id].append((detail.start_time, hold))
+            spent[staff_id] += real
             if seat(index + 1):
                 return True
             timelines[staff_id].pop()
+            spent[staff_id] -= real
         return False
 
     return seat(0)
@@ -344,6 +372,16 @@ def audit(db, branch, day):
     leave = leaves_for_day(db, list(names), day)
     rows = _sold_legs(db, branch)
 
+    # Off-duty hours block a technician exactly as leave does, so the checks
+    # below treat them as one thing.
+    day_start, day_end = day_bounds_utc(day)
+    blocked = {staff_id: list(windows) for staff_id, windows in leave.items()}
+    caps = {}
+    for member in staff_rows:
+        work_start, work_end = working_window(member, day)
+        blocked.setdefault(member.id, []).extend([(day_start, work_start), (work_end, day_end)])
+        caps[member.id] = member.max_hours_week * 60
+
     def when(moment):
         return f"{moment.astimezone(tz):%H:%M}"
 
@@ -353,11 +391,11 @@ def audit(db, branch, day):
         label = service.name.replace("Simulator ", "")
         if (detail.staff_id, service.id) not in minutes:
             problems.append(f"{names[detail.staff_id]} was given {label} but cannot do it")
-        for start, end in leave.get(detail.staff_id, []):
+        for start, end in blocked.get(detail.staff_id, []):
             if detail.start_time < end and detail.end_time > start:
                 problems.append(
                     f"{names[detail.staff_id]} was given {label} at {when(detail.start_time)}"
-                    f" - they are on leave until {when(end)}"
+                    f" - they are off until {when(end)}"
                 )
 
     per_staff: dict = {}
@@ -395,12 +433,31 @@ def audit(db, branch, day):
                 )
                 break  # one report per resource is enough to go and look
 
+    worked: dict = {}
+    for detail, _service in rows:
+        if detail.staff_id is not None:
+            worked[detail.staff_id] = worked.get(detail.staff_id, 0) + detail.duration_min
+    for staff_id, total in worked.items():
+        if total > caps.get(staff_id, 0):
+            problems.append(
+                f"{names[staff_id]} was given {total}m of work but their week allows"
+                f" {caps.get(staff_id, 0)}m"
+            )
+
+    # Any leg without a technician is a bug; which layer failed depends on
+    # whether the day could have been staffed at all. Selling promised it could.
     orphans = [detail for detail, _ in rows if detail.staff_id is None]
-    if orphans and _complete_assignment_exists(rows, list(names), minutes, leave):
-        problems.append(
-            f"{len(orphans)} leg(s) left unassigned, yet a complete assignment exists"
-            " - the allocator gave up too early"
-        )
+    if orphans:
+        if _complete_assignment_exists(rows, list(names), minutes, blocked, caps):
+            problems.append(
+                f"{len(orphans)} leg(s) left unassigned, yet a complete assignment exists"
+                " - the allocator gave up too early"
+            )
+        else:
+            problems.append(
+                f"{len(orphans)} leg(s) sold that nobody could ever have worked"
+                " - selling took on a day the salon cannot staff"
+            )
 
     return list(dict.fromkeys(problems))
 
@@ -496,15 +553,24 @@ def random_scenario(rng):
         (rng.choice(names), (hour := rng.randint(9, 15), 0), (hour + rng.randint(1, 4), 0))
         for _ in range(rng.randint(0, 2))
     ]
+    # Some of the team are part-timers on short weeks - the shape that makes
+    # both hours ceilings bite, and the shape a hand-written day never has.
+    contracts = {}
+    for name in names:
+        if rng.random() < 0.4:
+            start = rng.choice([9, 10, 12, 13])
+            contracts[name] = (start, start + rng.randint(3, 6), rng.choice([8, 12, 16, 40]))
+        else:
+            contracts[name] = (None, None, rng.choice([16, 24, 40, 40]))
     demand = [
         (
             rng.randint(9, 16),
             rng.choice([0, 15, 30, 45]),
             rng.sample(service_names, rng.randint(1, 2)),
         )
-        for _ in range(rng.randint(10, 20))
+        for _ in range(rng.randint(10, 28))
     ]
-    return technicians, resources, leaves, demand
+    return technicians, resources, leaves, demand, contracts
 
 
 def fuzz(db, rounds, first_seed) -> bool:
@@ -513,11 +579,11 @@ def fuzz(db, rounds, first_seed) -> bool:
     for offset in range(rounds):
         seed = first_seed + offset
         rng = random.Random(seed)
-        technicians, resources, leaves, demand = random_scenario(rng)
+        technicians, resources, leaves, demand, contracts = random_scenario(rng)
 
         reset(db, quiet=True)
         day = target_day()
-        branch, services, staff = build_salon(db, technicians, resources)
+        branch, services, staff = build_salon(db, technicians, resources, contracts)
         book_leave(db, staff, day, leaves, quiet=True)
         customers = make_customers(db, len(demand))
         place_demand(db, branch, services, customers, day, demand, quiet=True)
@@ -534,6 +600,7 @@ def fuzz(db, rounds, first_seed) -> bool:
             for name, cells in technicians.items():
                 print(f"  {name}: {cells}")
             print(f"  leave: {leaves}")
+            print(f"  contracts (start, end, max h/week): {contracts}")
             print(f"  demand: {demand}")
             report(db, branch, day, technicians)
             print(f"\nReproduce with: scripts/simulate_day.py --fuzz 1 --seed {seed}")

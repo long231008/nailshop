@@ -196,6 +196,9 @@ def create_booking(
                 "resource": service.resource,
                 "start": start_time,
                 "end": end_time + timedelta(minutes=service.buffer_after_min),
+                # The work itself, buffer excluded - what the hours ledger counts,
+                # matching the duration_min the nightly run adds up.
+                "service_end": end_time,
             }
         )
 
