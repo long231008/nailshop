@@ -46,7 +46,17 @@ def _day_details(db: Session, branch_id: UUID, target_date: date_type):
             BookingDetailModel.start_time >= day_start,
             BookingDetailModel.start_time < day_end,
         )
-        .order_by(BookingDetailModel.start_time)
+        # This order IS the order technicians get handed out: among legs that
+        # start together the first one seen picks first, while the turn ledger
+        # still has them level. start_time alone leaves those ties to Postgres,
+        # which reshuffles them whenever a row is rewritten - an admin approving
+        # a booking is enough - so the same day could allocate two different
+        # ways. Booked-first picks first: settled, and explainable to a customer.
+        .order_by(
+            BookingDetailModel.start_time,
+            BookingModel.created_at,
+            BookingDetailModel.id,
+        )
         .all()
     )
 
