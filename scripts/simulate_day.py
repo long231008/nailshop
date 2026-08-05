@@ -1,7 +1,8 @@
 """Run one salon day end to end and print what the scheduler decided.
 
-    venv/Scripts/python.exe scripts/simulate_day.py
-    venv/Scripts/python.exe scripts/simulate_day.py --reset
+    venv/Scripts/python.exe scripts/simulate_day.py            # one day, in full
+    venv/Scripts/python.exe scripts/simulate_day.py --fuzz 200 # hunt for bugs
+    venv/Scripts/python.exe scripts/simulate_day.py --reset    # clear up after
 
 Creating customers through the sign-in flow one at a time is far too slow to
 try the scheduler on, so this builds the whole day directly: a salon with a
@@ -10,10 +11,18 @@ through the real booking path - the same capacity, resource and matching checks
 a customer would hit. Then it closes the day (Step A + materialize) and prints
 each technician's timeline, the fairness ledger, and anything left unassigned.
 
+--fuzz runs random salons instead, checking after each one that no technician
+is double-booked, seated during their own leave, given work they cannot do, or
+put on a chair the branch does not have - and that nothing was left unassigned
+when a complete assignment existed. It stops at the first day that breaks one
+and prints the seed. Seeds 23, 28, 33 and 93 each found a real allocator bug;
+they make a decent regression check after touching the scheduler.
+
 Everything it creates is named "Simulator", so --reset removes it and nothing
 else. It never touches data you made yourself.
 """
 
+import random
 import sys
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -28,11 +37,15 @@ from app.allocation.application.materialize import materialize_day
 from app.allocation.application.roster import solve_day
 from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
+from app.availability.application.capacity import branch_resource_caps
 from app.bookings.application.create import create_booking
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel
 from app.bookings.presentation.schemas import BookingCreateRequest, BookingItemRequest
 from app.branches.infrastructure.models import LocationModel
+from app.capability.application.matrix import ceil_to_grid
 from app.capability.infrastructure.models import StaffCapabilityModel
+from app.leaves.application.leaves import leaves_for_day
+from app.leaves.infrastructure.models import StaffLeaveModel
 from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.clock import shop_timezone, today_in_shop_tz
 from app.shared.infrastructure.database.session import SessionLocal
@@ -61,6 +74,11 @@ TECHNICIANS = {
 # Physical capacity: one pedicure chair is the pinch point on purpose.
 RESOURCES = {"pedicure_chairs": 1, "manicure_tables": 3, "massage_beds": 1}
 
+# Technician, from, to (shop-local). An is the all-rounder, so taking them out
+# of the afternoon is what makes the day interesting: capacity has to stop
+# counting them and the allocator has to work around them.
+LEAVE = ("An", (13, 0), (17, 0))
+
 # hour, minute, [service names] - one customer each, so the 2h daily cap per
 # customer never gets in the way of what is being demonstrated.
 DEMAND = [
@@ -76,6 +94,9 @@ DEMAND = [
     (14, 0, ["Simulator Gel Mani"]),
     (15, 0, ["Simulator Nail Art"]),
     (15, 0, ["Simulator Head Massage"]),
+    (16, 0, ["Simulator Pedicure"]),  # An is on leave - only Binh is left
+    (16, 0, ["Simulator Gel Mani"]),
+    (17, 0, ["Simulator Gel Mani", "Simulator Nail Art"]),
 ]
 
 
@@ -88,7 +109,7 @@ def target_day():
     return day
 
 
-def reset(db) -> None:
+def reset(db, quiet=False) -> None:
     branch = db.query(LocationModel).filter_by(name=BRANCH_NAME).first()
     staff_ids = [
         row[0]
@@ -135,11 +156,12 @@ def reset(db) -> None:
     if branch:
         db.execute(text("DELETE FROM locations WHERE id = :id"), {"id": branch.id})
     db.commit()
-    print("Simulator data removed.")
+    if not quiet:
+        print("Simulator data removed.")
 
 
-def build_salon(db):
-    branch = LocationModel(name=BRANCH_NAME, address="1 Simulation Street", **RESOURCES)
+def build_salon(db, technicians=TECHNICIANS, resources=RESOURCES):
+    branch = LocationModel(name=BRANCH_NAME, address="1 Simulation Street", **resources)
     db.add(branch)
     db.flush()
 
@@ -161,7 +183,7 @@ def build_salon(db):
         services[name] = service
 
     staff = {}
-    for index, (display_name, cells) in enumerate(TECHNICIANS.items()):
+    for index, (display_name, cells) in enumerate(technicians.items()):
         user = UserModel(
             phone_number=f"{PHONE_PREFIX}{index:06d}",
             status=UserStatus.ACTIVE,
@@ -186,6 +208,26 @@ def build_salon(db):
     return branch, services, staff
 
 
+def book_leave(db, staff, day, leaves=(LEAVE,), quiet=False):
+    tz = shop_timezone()
+    for name, (from_hour, from_minute), (to_hour, to_minute) in leaves:
+        start = datetime.combine(day, time(from_hour, from_minute), tzinfo=tz)
+        end = datetime.combine(day, time(to_hour, to_minute), tzinfo=tz)
+        db.add(
+            StaffLeaveModel(
+                staff_id=staff[name].id,
+                start_time=start.astimezone(timezone.utc),
+                end_time=end.astimezone(timezone.utc),
+            )
+        )
+        if not quiet:
+            print(
+                f"  {name} is on leave "
+                f"{from_hour:02d}:{from_minute:02d}-{to_hour:02d}:{to_minute:02d}"
+            )
+    db.commit()
+
+
 def make_customers(db, count):
     customers = []
     for index in range(count):
@@ -202,12 +244,13 @@ def make_customers(db, count):
     return customers
 
 
-def place_demand(db, branch, services, customers, day):
+def place_demand(db, branch, services, customers, day, demand=DEMAND, quiet=False):
     tz = shop_timezone()
     accepted, refused = 0, 0
-    print(f"\nSelling {day} (every booking goes through the real capacity check)")
-    print("-" * 74)
-    for (hour, minute, wanted), customer in zip(DEMAND, customers, strict=True):
+    if not quiet:
+        print(f"\nSelling {day} (every booking goes through the real capacity check)")
+        print("-" * 74)
+    for (hour, minute, wanted), customer in zip(demand, customers, strict=True):
         start = datetime.combine(day, time(hour=hour, minute=minute), tzinfo=tz).astimezone(
             timezone.utc
         )
@@ -224,16 +267,156 @@ def place_demand(db, branch, services, customers, day):
         try:
             create_booking(db, customer.id, payload)
             accepted += 1
-            print(f"  sold      {label}")
+            if not quiet:
+                print(f"  sold      {label}")
         except Exception as exc:  # noqa: BLE001 - every refusal is worth showing
             refused += 1
             db.rollback()
-            print(f"  REFUSED   {label}  -> {exc}")
-    print("-" * 74)
-    print(f"  {accepted} sold, {refused} refused")
+            if not quiet:
+                print(f"  REFUSED   {label}  -> {exc}")
+    if not quiet:
+        print("-" * 74)
+        print(f"  {accepted} sold, {refused} refused")
 
 
-def report(db, branch, day):
+def _sold_legs(db, branch):
+    return (
+        db.query(BookingDetailModel, ServiceModel)
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+        .filter(BookingModel.branch_id == branch.id)
+        .order_by(BookingDetailModel.start_time)
+        .all()
+    )
+
+
+def _complete_assignment_exists(rows, staff_ids, minutes, leave, budget=200_000):
+    """Could every sold leg have had a technician? Backtracking over the same
+    rules materialize_day uses - capability, real per-tech minutes, buffers and
+    leave. Resource caps are not re-checked here: the legs are already sold, so
+    who performs them is the only open question."""
+    timelines = {staff_id: [] for staff_id in staff_ids}
+    steps = [budget]
+
+    def seat(index):
+        if index == len(rows):
+            return True
+        if steps[0] <= 0:
+            return False
+        steps[0] -= 1
+        detail, service = rows[index]
+        for staff_id in staff_ids:
+            real = minutes.get((staff_id, service.id))
+            if real is None:
+                continue
+            end = detail.start_time + timedelta(minutes=ceil_to_grid(real))
+            hold = end + timedelta(minutes=service.buffer_after_min)
+            busy = timelines[staff_id] + leave.get(staff_id, [])
+            if not all(b <= detail.start_time or a >= hold for a, b in busy):
+                continue
+            timelines[staff_id].append((detail.start_time, hold))
+            if seat(index + 1):
+                return True
+            timelines[staff_id].pop()
+        return False
+
+    return seat(0)
+
+
+def audit(db, branch, day):
+    """The invariants a finished schedule must never break.
+
+    This is what makes the simulator a bug finder rather than something to
+    squint at: a timeline that looks plausible can still have a technician in
+    two rooms at once, or seated during their own leave.
+    """
+    tz = shop_timezone()
+    problems = []
+
+    staff_rows = db.query(StaffModel).filter_by(branch_id=branch.id).all()
+    names = {member.id: member.display_name for member in staff_rows}
+    minutes = {
+        (row.staff_id, row.service_id): row.minutes
+        for row in db.query(StaffCapabilityModel).filter(
+            StaffCapabilityModel.staff_id.in_(list(names))
+        )
+    }
+    leave = leaves_for_day(db, list(names), day)
+    rows = _sold_legs(db, branch)
+
+    def when(moment):
+        return f"{moment.astimezone(tz):%H:%M}"
+
+    for detail, service in rows:
+        if detail.staff_id is None:
+            continue
+        label = service.name.replace("Simulator ", "")
+        if (detail.staff_id, service.id) not in minutes:
+            problems.append(f"{names[detail.staff_id]} was given {label} but cannot do it")
+        for start, end in leave.get(detail.staff_id, []):
+            if detail.start_time < end and detail.end_time > start:
+                problems.append(
+                    f"{names[detail.staff_id]} was given {label} at {when(detail.start_time)}"
+                    f" - they are on leave until {when(end)}"
+                )
+
+    per_staff: dict = {}
+    for detail, service in rows:
+        if detail.staff_id is not None:
+            per_staff.setdefault(detail.staff_id, []).append(
+                (
+                    detail.start_time,
+                    detail.end_time + timedelta(minutes=service.buffer_after_min),
+                    service.name.replace("Simulator ", ""),
+                )
+            )
+    for staff_id, windows in per_staff.items():
+        windows.sort()
+        for (_, first_end, first), (second_start, _, second) in zip(
+            windows, windows[1:], strict=False
+        ):
+            if second_start < first_end:
+                problems.append(
+                    f"{names[staff_id]} is in two places at once: {first} runs to"
+                    f" {when(first_end)} but {second} starts {when(second_start)}"
+                )
+
+    for resource, cap in branch_resource_caps(branch).items():
+        for tick in sorted({detail.start_time for detail, _ in rows}):
+            busy = [
+                service.name.replace("Simulator ", "")
+                for detail, service in rows
+                if service.resource == resource and detail.start_time <= tick < detail.end_time
+            ]
+            if len(busy) > cap:
+                problems.append(
+                    f"{resource}: {len(busy)} at once at {when(tick)}"
+                    f" ({', '.join(busy)}) but the branch has {cap}"
+                )
+                break  # one report per resource is enough to go and look
+
+    orphans = [detail for detail, _ in rows if detail.staff_id is None]
+    if orphans and _complete_assignment_exists(rows, list(names), minutes, leave):
+        problems.append(
+            f"{len(orphans)} leg(s) left unassigned, yet a complete assignment exists"
+            " - the allocator gave up too early"
+        )
+
+    return list(dict.fromkeys(problems))
+
+
+def print_audit(problems):
+    print("\n" + "=" * 74)
+    if problems:
+        print(f"  {len(problems)} PROBLEM(S) FOUND")
+        for problem in problems:
+            print(f"    ! {problem}")
+    else:
+        print("  All invariants hold: capability, no double-booking, leave, resource caps,")
+        print("  and nothing was left unassigned that could have been staffed.")
+
+
+def report(db, branch, day, technicians=TECHNICIANS):
     print(f"\nAfter the 21:00 close on {day}")
     print("=" * 74)
 
@@ -267,9 +450,9 @@ def report(db, branch, day):
                 service.turn_weight
             )
 
-    for name in sorted(TECHNICIANS):
+    for name in sorted(technicians):
         legs = by_staff.get(name, [])
-        can_do = ", ".join(s.replace("Simulator ", "") for s in TECHNICIANS[name])
+        can_do = ", ".join(s.replace("Simulator ", "") for s in technicians[name])
         print(f"\n  {name}  (can do: {can_do})")
         print(f"  turns: {turns.get(name, 0):.1f}   jobs: {len(legs)}")
         for line in legs:
@@ -289,6 +472,84 @@ def report(db, branch, day):
     print(f"  Fairness: turns ranged {spread} across {len(turns)} working technician(s).")
 
 
+def random_scenario(rng):
+    """A salon nobody designed: random skills, speeds, chairs, leave and demand.
+
+    The hand-written day above only ever finds the bugs it was written to find.
+    These days were not chosen by anyone, which is the point.
+    """
+    names = ["An", "Binh", "Chi", "Dung", "Em"][: rng.randint(2, 5)]
+    service_names = [row[0] for row in SERVICES]
+    technicians = {
+        name: {
+            service: rng.choice([15, 30, 45, 60])
+            for service in rng.sample(service_names, rng.randint(1, len(service_names)))
+        }
+        for name in names
+    }
+    resources = {
+        "pedicure_chairs": rng.randint(1, 3),
+        "manicure_tables": rng.randint(1, 4),
+        "massage_beds": rng.randint(1, 2),
+    }
+    leaves = [
+        (rng.choice(names), (hour := rng.randint(9, 15), 0), (hour + rng.randint(1, 4), 0))
+        for _ in range(rng.randint(0, 2))
+    ]
+    demand = [
+        (
+            rng.randint(9, 16),
+            rng.choice([0, 15, 30, 45]),
+            rng.sample(service_names, rng.randint(1, 2)),
+        )
+        for _ in range(rng.randint(10, 20))
+    ]
+    return technicians, resources, leaves, demand
+
+
+def fuzz(db, rounds, first_seed) -> bool:
+    """Run random days until one breaks an invariant. Returns True if all held."""
+    print(f"Fuzzing {rounds} random day(s) from seed {first_seed}\n")
+    for offset in range(rounds):
+        seed = first_seed + offset
+        rng = random.Random(seed)
+        technicians, resources, leaves, demand = random_scenario(rng)
+
+        reset(db, quiet=True)
+        day = target_day()
+        branch, services, staff = build_salon(db, technicians, resources)
+        book_leave(db, staff, day, leaves, quiet=True)
+        customers = make_customers(db, len(demand))
+        place_demand(db, branch, services, customers, day, demand, quiet=True)
+        solve_day(db, day)
+        db.commit()
+        materialize_day(db, branch.id, day)
+
+        problems = audit(db, branch, day)
+        print(f"  seed {seed}: {'OK' if not problems else f'{len(problems)} PROBLEM(S)'}")
+        if problems:
+            print_audit(problems)
+            print("\nThe salon that broke it:")
+            print(f"  resources: {resources}")
+            for name, cells in technicians.items():
+                print(f"  {name}: {cells}")
+            print(f"  leave: {leaves}")
+            print(f"  demand: {demand}")
+            report(db, branch, day, technicians)
+            print(f"\nReproduce with: scripts/simulate_day.py --fuzz 1 --seed {seed}")
+            return False
+    print(f"\n{rounds} random day(s), no invariant broken.")
+    return True
+
+
+def _flag(name, fallback):
+    if name in sys.argv:
+        index = sys.argv.index(name) + 1
+        if index < len(sys.argv) and sys.argv[index].isdigit():
+            return int(sys.argv[index])
+    return fallback
+
+
 def main() -> None:
     db = SessionLocal()
     try:
@@ -300,6 +561,10 @@ def main() -> None:
             print("Simulator salon already exists - clearing it first.")
             reset(db)
 
+        if "--fuzz" in sys.argv:
+            ok = fuzz(db, _flag("--fuzz", 25), _flag("--seed", 1))
+            sys.exit(0 if ok else 1)
+
         day = target_day()
         branch, services, staff = build_salon(db)
         print(f"Built {BRANCH_NAME}: {len(staff)} technicians, {len(services)} services")
@@ -307,6 +572,8 @@ def main() -> None:
         for name, cells in TECHNICIANS.items():
             minutes = ", ".join(f"{s.replace('Simulator ', '')} {m}'" for s, m in cells.items())
             print(f"  {name}: {minutes}")
+
+        book_leave(db, staff, day)
 
         customers = make_customers(db, len(DEMAND))
         place_demand(db, branch, services, customers, day)
@@ -317,6 +584,7 @@ def main() -> None:
         print(f"\nAllocation run: assigned={run.assigned_count} unassigned={run.unassigned_count}")
 
         report(db, branch, day)
+        print_audit(audit(db, branch, day))
         print("\nRun again to redo the day, or --reset to remove all of it.")
     finally:
         db.close()

@@ -221,6 +221,29 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         turns[staff_id] -= float(service.turn_weight)
         detail.staff_id = None
 
+    def snapshot():
+        """Everything the repair pass below can change, so a branch that leads
+        nowhere can be abandoned wholesale instead of unpicked step by step."""
+        return (
+            {
+                detail_id: (detail.staff_id, detail.end_time, detail.duration_min)
+                for detail_id, (detail, _service) in by_id.items()
+            },
+            {staff_id: list(legs) for staff_id, legs in seated.items()},
+            dict(turns),
+            dict(week_minutes),
+        )
+
+    def restore(state):
+        legs, seats, turn_ledger, week_load = state
+        for detail_id, (staff_id, end, minutes) in legs.items():
+            detail = by_id[detail_id][0]
+            detail.staff_id, detail.end_time, detail.duration_min = staff_id, end, minutes
+        seated.update({staff_id: list(entries) for staff_id, entries in seats.items()})
+        turns.update(turn_ledger)
+        week_minutes.clear()
+        week_minutes.update(week_load)
+
     for detail, booking, service in rows:
         if detail.staff_id is not None:
             continue
@@ -267,42 +290,65 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     # failing to find one, not an oversell.
     #
     # So walk an augmenting path: offer the leg to a tech who is busy, and move
-    # the leg standing in the way to someone else, recursively. `tried` stops it
-    # walking in circles. Fairness still decides everything the greedy pass
-    # could settle - this only runs where a customer would otherwise be left
-    # with no technician at all, which is the worse outcome by far.
-    def reseat(detail_id, tried: set) -> bool:
+    # the leg standing in the way to someone else, recursively. Fairness still
+    # decides everything the greedy pass could settle - this only runs where a
+    # customer would otherwise be left with no technician at all.
+    #
+    # Three things keep the walk honest. `tried` holds the (leg, tech) pairs on
+    # the chain being explored right now - pairs, not techs, because a tech
+    # booked at 14:00 is still free at 09:00, and only the current chain,
+    # because a pairing that fails against one arrangement is often exactly
+    # right against the next. `reserved` is the window being cleared for the leg
+    # one level up, so the leg moving out of the way cannot quietly move back
+    # into it. `steps` is the search budget: this is a search, and a busy
+    # branch-day is a big one.
+    def reseat(detail_id, tried: set, reserved: list, steps: list) -> bool:
         detail, service = by_id[detail_id]
         for staff in staff_list:
-            if staff.id in tried:
+            if (detail_id, staff.id) in tried or steps[0] <= 0:
                 continue
+            steps[0] -= 1
             fit = shape(detail, service, staff.id)
             if fit is None:
                 continue
             real, end, hold_end = fit
             if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
                 continue
-            busy = blockers(staff.id, detail.start_time, hold_end)
-            if busy is None or len(busy) > 1:
-                # Locks and leave never give way, and shifting a whole cluster
-                # of legs at once is a different problem: one deep is far enough
-                # to undo the greedy pass's mistakes without a costly search.
+            if any(
+                held == staff.id and start < hold_end and until > detail.start_time
+                for held, start, until in reserved
+            ):
                 continue
-            tried.add(staff.id)
-            if busy:
-                victim, victim_service = by_id[busy[0]]
-                home = victim.staff_id
-                lift(victim, victim_service)
-                if not reseat(victim.id, tried):
-                    place(victim, victim_service, home, *shape(victim, victim_service, home))
-                    continue
-            place(detail, service, staff.id, real, end, hold_end)
-            return True
+            busy = blockers(staff.id, detail.start_time, hold_end)
+            if busy is None:
+                continue  # a lock or leave, which never gives way
+            marks = set(tried)
+            tried.add((detail_id, staff.id))
+
+            undo = snapshot()
+            held = reserved + [(staff.id, detail.start_time, hold_end)]
+            if all(move(victim_id, tried, held, steps) for victim_id in busy):
+                place(detail, service, staff.id, real, end, hold_end)
+                return True
+            # Abandon the branch whole: the legs go back where they were, and so
+            # do the marks. Rewinding only this level's mark would leave the ones
+            # its successful sub-chains added, quietly barring a tech that the
+            # next branch needs.
+            restore(undo)
+            tried.clear()
+            tried.update(marks)
         return False
+
+    def move(victim_id, tried, held, steps) -> bool:
+        victim, victim_service = by_id[victim_id]
+        lift(victim, victim_service)
+        return reseat(victim_id, tried, held, steps)
 
     for detail_id in pending:
         if by_id[detail_id][0].staff_id is None:
-            reseat(detail_id, set())
+            # A budget, because the walk is a search and a busy branch-day is a
+            # big one. Running out just means this leg waits for a human.
+            reseat(detail_id, set(), [], [5000])
 
     assigned = sum(1 for detail_id in pending if by_id[detail_id][0].staff_id is not None)
     unassigned = len(pending) - assigned
