@@ -29,7 +29,7 @@ from app.bookings.infrastructure.models import BookingDetailModel, BookingModel,
 from app.branches.infrastructure.models import LocationModel
 from app.capability.application.matrix import ceil_to_grid, load_matrix, working_window
 from app.leaves.application.leaves import leaves_for_day
-from app.services.infrastructure.models import ServiceModel
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import (
     is_closed_day,
     now_utc,
@@ -151,9 +151,13 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
     day_start = datetime.combine(day, time.min, tzinfo=shop_timezone()).astimezone(timezone.utc)
     day_end = day_start + timedelta(days=1)
     rows = (
-        db.query(BookingDetailModel, ServiceModel)
+        db.query(BookingDetailModel, ServiceModel, ServiceExtensionModel.extra_duration_min)
         .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
         .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+        .outerjoin(
+            ServiceExtensionModel,
+            BookingDetailModel.service_extension_id == ServiceExtensionModel.id,
+        )
         .filter(
             BookingModel.branch_id == branch_id,
             BookingModel.status.in_(ACTIVE_BOOKING_STATUSES),
@@ -174,8 +178,12 @@ def existing_legs(db: Session, branch_id: UUID, day: date_type) -> list[dict]:
             "end": detail.end_time + timedelta(minutes=service.buffer_after_min),
             # The work itself, buffer excluded - what the hours ledger counts.
             "service_end": detail.end_time,
+            # What a specific technician would need: their matrix cell plus the
+            # chosen length, snapped - the sum materialize will recompute.
+            "extension_extra": int(extra or 0),
+            "buffer_min": service.buffer_after_min,
         }
-        for detail, service in rows
+        for detail, service, extra in rows
     ]
 
 
@@ -223,6 +231,7 @@ class CapacityLedger:
         self.configured = matrix_configured_for(staff_list, matrix)
         self.staff_ids = [staff.id for staff in staff_list]
         self.skills = {staff.id: set(matrix.get(staff.id, {})) for staff in staff_list}
+        self.minutes = {staff.id: dict(matrix.get(staff.id, {})) for staff in staff_list}
         self.leave = leaves_for_day(db, self.staff_ids, day)
         # Part-timers are only in for part of the day, so the lanes they fill
         # have to shrink with them - otherwise the shop sells a five o'clock
@@ -241,12 +250,55 @@ class CapacityLedger:
         self.booked: dict[datetime, list[dict]] = {}
         self.used_per_resource: dict[tuple[str, datetime], int] = {}
         for leg in self.legs:
+            leg["min_end"] = self._min_hold_end(leg)
             resource = self._resource_of(leg)
             for slot in _slots_covered(leg["start"], leg["end"]):
                 self.booked.setdefault(slot, []).append(leg)
                 if resource is not None:
                     key = (resource, slot)
                     self.used_per_resource[key] = self.used_per_resource.get(key, 0) + 1
+
+    def _tech_minutes(self, staff_id: UUID, leg: dict) -> int | None:
+        """Work minutes this technician would need for this leg - their matrix
+        cell plus the leg's chosen length, snapped to the grid: the same sum
+        materialize_day computes when it assigns. None = cannot do it.
+
+        Legacy mode (no matrix yet) keeps the planned span: with no cells there
+        is no per-technician speed to know about.
+        """
+        if not self.configured:
+            return _work_minutes(leg)
+        cell = self.minutes.get(staff_id, {}).get(leg["service_id"])
+        if cell is None:
+            return None
+        return ceil_to_grid(cell + leg.get("extension_extra", 0))
+
+    def _min_hold_end(self, leg: dict) -> datetime:
+        """The earliest this leg could release its technician: the fastest
+        eligible technician's own span plus the buffer.
+
+        A leg assigned to anybody occupies AT LEAST this window, whoever it
+        goes to - so counting occupancy this way is a relaxation of every real
+        assignment, never of none. A named leg's stored span already is its
+        real span, and a leg nobody can serve keeps the cautious planned span
+        (the matching refuses it anyway).
+        """
+        if leg.get("staff_id") is not None:
+            return leg["end"]
+        buffer_min = leg.get("buffer_min")
+        if buffer_min is None:
+            return leg["end"]
+        best = None
+        for staff_id in self.staff_ids:
+            minutes = self._tech_minutes(staff_id, leg)
+            if minutes is None:
+                continue
+            hold = leg["start"] + timedelta(minutes=minutes + buffer_min)
+            if not self._free_between(staff_id, leg["start"], hold):
+                continue
+            if best is None or hold < best:
+                best = hold
+        return best if best is not None else leg["end"]
 
     def _can_do(self, staff_id: UUID, leg: dict) -> bool:
         # Legacy mode (not one capability cell saved yet): everybody does
@@ -265,7 +317,7 @@ class CapacityLedger:
             return False
         return not any(a < end and b > start for a, b in self.leave.get(staff_id, ()))
 
-    def _can_serve(self, staff_id: UUID, leg: dict) -> bool:
+    def _can_serve(self, staff_id: UUID, leg: dict, tight: bool = False) -> bool:
         """Could this technician take this leg - the whole of it?
 
         Whoever gets a leg keeps it from start to finish, so being on the floor
@@ -273,18 +325,34 @@ class CapacityLedger:
         a shift that ends before the leg does, rules them out for all of it.
         Checking only the slot let the matching hand one leg to two different
         people in two different slots, and sell a day on the strength of it.
-        """
-        return self._can_do(staff_id, leg) and self._free_between(
-            staff_id, leg["start"], leg["end"]
-        )
 
-    def _servable(self, slot: datetime, occupants: list[dict]) -> bool:
+        Normally the window tested is this technician's OWN span for the leg -
+        their real minutes, not the slowest technician's. `tight` keeps the
+        cautious planned span instead, which is yesterday's rule.
+        """
+        if not self._can_do(staff_id, leg):
+            return False
+        if tight or leg.get("staff_id") is not None or leg.get("buffer_min") is None:
+            return self._free_between(staff_id, leg["start"], leg["end"])
+        minutes = self._tech_minutes(staff_id, leg)
+        if minutes is None:
+            return False
+        hold = leg["start"] + timedelta(minutes=minutes + leg["buffer_min"])
+        return self._free_between(staff_id, leg["start"], hold)
+
+    def _servable(self, slot: datetime, occupants: list[dict], tight: bool = False) -> bool:
         pool = self._present(slot)
         free_pool = set(pool)
         open_legs = []
         for leg in occupants:
             named = leg.get("staff_id")
             if named is None:
+                # With real minutes, a leg only holds a technician until the
+                # fastest eligible one could be done: any real assignment
+                # occupies at least that window, so skipping the tail of the
+                # cautious span relaxes every assignment and invents none.
+                if not tight and leg.get("min_end", leg["end"]) <= slot:
+                    continue
                 open_legs.append(leg)
             elif named in free_pool:
                 free_pool.discard(named)  # already promised to that technician
@@ -292,22 +360,26 @@ class CapacityLedger:
             # outside this plan (a manual move), so it holds nobody here.
         if not open_legs:
             return True
-        return _shareable(open_legs, [s for s in pool if s in free_pool], self._can_serve)
+
+        def can_serve(staff_id, leg):
+            return self._can_serve(staff_id, leg, tight)
+
+        return _shareable(open_legs, [s for s in pool if s in free_pool], can_serve)
 
     def can_be_staffed(self, legs: list[dict]) -> bool:
         """The exact question, for the moment a booking is actually taken.
 
         fits() asks it one 15-minute slot at a time, which is cheap enough to
-        run for every time on the page. It is a necessary condition, not a
-        sufficient one: each slot is matched on its own, so a leg can be covered
-        by one technician in one slot and somebody else in the next - a day
-        every slot can staff that no single assignment can. Leave, or a shift
-        ending mid-leg, is what makes that reachable.
+        run for every time on the page - but each slot is matched on its own,
+        so it can pass a day no single assignment covers. This solves the whole
+        day instead: one technician per leg start to finish, each on their OWN
+        minutes - the same numbers the 21:00 run will use - nobody in two
+        places, nobody past their week. Legs already named keep their holder.
 
-        This solves the whole day instead: one technician per leg, start to
-        finish, nobody in two places, nobody past their week. Slow enough that
-        it belongs here and not on the availability page - which was always a
-        list of suggestions re-checked at this point anyway.
+        fits() failing settles it (it errs open, so a failure is real). If the
+        search runs out of budget before settling either way, the verdict falls
+        back to the cautious planned-span rule the ledger sold on before real
+        minutes: never more permissive than that day was.
         """
         if not self.fits(legs):
             return False
@@ -321,42 +393,65 @@ class CapacityLedger:
             if named is None:
                 open_legs.append(leg)
             elif named in busy:
-                busy[named].append(leg)
+                busy[named].append((leg["start"], leg["end"]))
                 spent[named] = spent.get(named, 0) + _work_minutes(leg)
+
+        # Fewest choices first: the leg only one technician can take decides
+        # whether the day works, so try it before the ones anyone could hold.
+        choices: dict[int, list[UUID]] = {}
+        for index, leg in enumerate(open_legs):
+            choices[index] = [
+                staff_id for staff_id in self.staff_ids if self._can_do(staff_id, leg)
+            ]
+        order = sorted(
+            range(len(open_legs)), key=lambda i: (len(choices[i]), open_legs[i]["start"])
+        )
 
         steps = [SOLVE_BUDGET]
 
-        def seat(index: int) -> bool:
-            if index == len(open_legs):
+        class _Exhausted(Exception):
+            pass
+
+        def seat(position: int) -> bool:
+            if position == len(order):
                 return True
             if steps[0] <= 0:
-                # Out of search, which means "could not disprove", not "cannot
-                # be done". Refusing here would lose a booking that is probably
-                # fine; letting it through leaves the manager the same tidy-up
-                # they already have for a technician calling in sick.
-                return True
+                raise _Exhausted()
             steps[0] -= 1
-            leg = open_legs[index]
-            need = _work_minutes(leg)
-            for staff_id in self.staff_ids:
-                if not self._can_serve(staff_id, leg):
+            leg = open_legs[order[position]]
+            buffer_min = leg.get("buffer_min")
+            for staff_id in choices[order[position]]:
+                need = self._tech_minutes(staff_id, leg)
+                if need is None:
+                    continue
+                if buffer_min is None:
+                    # No per-tech data on this leg: hold the planned span.
+                    hold_start, hold_end = leg["start"], leg["end"]
+                    need = _work_minutes(leg)
+                else:
+                    hold_start = leg["start"]
+                    hold_end = leg["start"] + timedelta(minutes=need + buffer_min)
+                if not self._free_between(staff_id, hold_start, hold_end):
                     continue
                 if spent.get(staff_id, 0) + need > self.week_cap[staff_id]:
                     continue
-                if any(
-                    held["start"] < leg["end"] and held["end"] > leg["start"]
-                    for held in busy[staff_id]
-                ):
+                if any(a < hold_end and b > hold_start for a, b in busy[staff_id]):
                     continue
-                busy[staff_id].append(leg)
+                busy[staff_id].append((hold_start, hold_end))
                 spent[staff_id] = spent.get(staff_id, 0) + need
-                if seat(index + 1):
+                if seat(position + 1):
                     return True
                 busy[staff_id].pop()
                 spent[staff_id] -= need
             return False
 
-        return seat(0)
+        try:
+            return seat(0)
+        except _Exhausted:
+            # Could not settle it either way inside the budget. Fall back to
+            # yesterday's cautious rule rather than guessing: what the planned
+            # spans say, this booking gets.
+            return self.fits(legs, tight=True)
 
     def _resource_of(self, leg: dict) -> str | None:
         """The tracked physical resource a leg needs, or None when its resource
@@ -384,11 +479,21 @@ class CapacityLedger:
                     return False
         return True
 
-    def fits(self, legs: list[dict]) -> bool:
+    def fits(self, legs: list[dict], tight: bool = False) -> bool:
         """Could the day still be staffed with these legs added?
 
         Legs of the same proposal count against each other too: two steps of one
         visit that overlap need two technicians, the same as two customers.
+
+        By default technicians are matched on their OWN minutes, so a fast
+        technician frees up as early as they really would - this is what the
+        availability page runs, and it errs open: the exact solve at the point
+        of booking has the final word. `tight` uses the cautious planned span
+        throughout - yesterday's rule, kept as the fallback verdict.
+
+        Physical resources are counted on the planned span in BOTH modes, and
+        must stay so: the nightly run never checks chairs, so their safety
+        rests on selling having counted the widest span any assignment can use.
         """
         # Hours the team has left this week, against the work it already owes
         # plus this visit. A day can look perfectly staffable slot by slot and
@@ -400,6 +505,8 @@ class CapacityLedger:
         touched: dict[datetime, list[dict]] = {}
         pending_resource: dict[tuple[str, datetime], int] = {}
         for leg in legs:
+            if "min_end" not in leg:
+                leg["min_end"] = self._min_hold_end(leg)
             resource = self._resource_of(leg)
             for slot in _slots_covered(leg["start"], leg["end"]):
                 touched.setdefault(slot, []).append(leg)
@@ -413,7 +520,7 @@ class CapacityLedger:
                         return False
 
         return all(
-            self._servable(slot, self.booked.get(slot, []) + pending)
+            self._servable(slot, self.booked.get(slot, []) + pending, tight)
             for slot, pending in touched.items()
         )
 

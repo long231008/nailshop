@@ -199,6 +199,10 @@ def create_booking(
                 # The work itself, buffer excluded - what the hours ledger counts,
                 # matching the duration_min the nightly run adds up.
                 "service_end": end_time,
+                # For per-technician minutes: the chosen length's extra and the
+                # raw buffer, so the ledger can rebuild any tech's real span.
+                "extension_extra": extra_minutes,
+                "buffer_min": service.buffer_after_min,
             }
         )
 

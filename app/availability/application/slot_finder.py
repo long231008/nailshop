@@ -70,6 +70,7 @@ def build_visit_legs(
                 "resource": service.resource,
                 "offset_min": offset,
                 "duration_min": minutes,
+                "extension_extra": extra,
                 "buffer_min": service.buffer_after_min,
             }
         )
@@ -90,6 +91,8 @@ def place_legs(legs: list[dict], visit_start) -> list[dict]:
                 "start": start,
                 "end": end + timedelta(minutes=leg["buffer_min"]),
                 "service_end": end,
+                "extension_extra": leg.get("extension_extra", 0),
+                "buffer_min": leg["buffer_min"],
             }
         )
     return placed

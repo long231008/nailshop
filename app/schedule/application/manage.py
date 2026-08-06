@@ -176,6 +176,8 @@ def add_appointment(
                 "end": end_time + timedelta(minutes=service.buffer_after_min),
                 # The work itself, buffer excluded - what the hours ledger counts.
                 "service_end": end_time,
+                "extension_extra": 0,  # desk bookings carry no length extension
+                "buffer_min": service.buffer_after_min,
             }
         )
         prepared.append(
