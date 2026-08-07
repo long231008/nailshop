@@ -15,6 +15,8 @@ from app.allocation.application.materialize import _week_assigned_minutes
 from app.allocation.application.roster import expected_staff
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.availability.application.capacity import (
+    _slots_covered,
+    branch_resource_caps,
     matrix_configured_for,
     staff_timeline_busy,
 )
@@ -24,6 +26,7 @@ from app.bookings.infrastructure.models import (
     BookingModel,
     BookingStatus,
 )
+from app.branches.infrastructure.models import LocationModel
 from app.capability.application.matrix import (
     ceil_to_grid,
     is_available,
@@ -32,7 +35,7 @@ from app.capability.application.matrix import (
 )
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
-from app.shared.infrastructure.clock import shop_timezone
+from app.shared.infrastructure.clock import day_bounds_utc, shop_timezone
 from app.slot_locks.application.locks import locks_overlapping
 from app.staff.infrastructure.models import StaffModel, StaffStatus
 
@@ -50,6 +53,41 @@ class ReassignConflictError(Exception):
 
 
 REASSIGNABLE_BOOKING_STATUSES = (BookingStatus.PENDING, BookingStatus.APPROVED)
+
+
+def _resource_still_free(db: Session, branch_id, detail, service, hold_end) -> bool:
+    """Would this leg still have a chair/table/bed over its new, possibly
+    longer span? Counts every other assigned leg needing the same resource."""
+    branch = db.get(LocationModel, branch_id)
+    caps = branch_resource_caps(branch) if branch is not None else {}
+    if service.resource not in caps:
+        return True
+    day_start, day_end = day_bounds_utc(detail.start_time.astimezone(shop_timezone()).date())
+    rows = (
+        db.query(BookingDetailModel, ServiceModel.buffer_after_min)
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .join(ServiceModel, BookingDetailModel.service_id == ServiceModel.id)
+        .filter(
+            BookingModel.branch_id == branch_id,
+            BookingModel.status.in_(list(REASSIGNABLE_BOOKING_STATUSES)),
+            BookingDetailModel.staff_id.isnot(None),
+            BookingDetailModel.id != detail.id,
+            ServiceModel.resource == service.resource,
+            BookingDetailModel.start_time < day_end,
+            BookingDetailModel.end_time > day_start,
+        )
+        .all()
+    )
+    used: dict = {}
+    for other, buffer_min in rows:
+        for slot in _slots_covered(
+            other.start_time, other.end_time + timedelta(minutes=buffer_min)
+        ):
+            used[slot] = used.get(slot, 0) + 1
+    return all(
+        used.get(slot, 0) < caps[service.resource]
+        for slot in _slots_covered(detail.start_time, hold_end)
+    )
 
 
 def reassign_leg(
@@ -129,6 +167,11 @@ def reassign_leg(
             busy.append((lock.start_time, lock.end_time))
     # A leave window blocks the target tech just like a booking would.
     busy.extend(leaves_for_day(db, [staff.id], day).get(staff.id, []))
+    # A slower technician holds the chair longer than the leg does today, and
+    # nothing downstream re-checks chairs - so the move must prove one is free
+    # for the WIDER span before it happens.
+    if not _resource_still_free(db, booking.branch_id, detail, service, hold_end):
+        raise ReassignConflictError()
     # So do the hours a part-timer is not in for.
     work_start, work_end = working_window(staff, day)
     if detail.start_time < work_start or hold_end > work_end:

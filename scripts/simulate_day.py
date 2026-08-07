@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import text
 
-from app.allocation.application.materialize import materialize_day
+from app.allocation.application.materialize import materialize_day, release_staff_assignments
 from app.allocation.application.roster import solve_day
 from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
@@ -348,7 +348,7 @@ def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=
     return seat(0)
 
 
-def audit(db, branch, day):
+def audit(db, branch, day, allow_orphans=False):
     """The invariants a finished schedule must never break.
 
     This is what makes the simulator a bug finder rather than something to
@@ -421,7 +421,9 @@ def audit(db, branch, day):
             busy = [
                 service.name.replace("Simulator ", "")
                 for detail, service in rows
-                if service.resource == resource and detail.start_time <= tick < detail.end_time
+                if detail.staff_id is not None
+                and service.resource == resource
+                and detail.start_time <= tick < detail.end_time
             ]
             if len(busy) > cap:
                 problems.append(
@@ -443,8 +445,11 @@ def audit(db, branch, day):
 
     # Any leg without a technician is a bug; which layer failed depends on
     # whether the day could have been staffed at all. Selling promised it could.
+    # After a sick call the promise is void - somebody's work has nowhere to
+    # go, that is exactly what the manager's list is for - so the caller may
+    # waive this one check while every other invariant still applies.
     orphans = [detail for detail, _ in rows if detail.staff_id is None]
-    if orphans:
+    if orphans and not allow_orphans:
         if _complete_assignment_exists(rows, list(names), minutes, blocked, caps):
             problems.append(
                 f"{len(orphans)} leg(s) left unassigned, yet a complete assignment exists"
@@ -570,6 +575,18 @@ def random_scenario(rng):
     return technicians, resources, leaves, demand, contracts
 
 
+def _busiest_staff(db, branch):
+    """The technician holding the most legs at this branch - the worst person
+    to lose, which is the point of the sick-call wave."""
+    counts: dict = {}
+    for detail, _service in _sold_legs(db, branch):
+        if detail.staff_id is not None:
+            counts[detail.staff_id] = counts.get(detail.staff_id, 0) + 1
+    if not counts:
+        return None
+    return db.get(StaffModel, max(counts, key=counts.get))
+
+
 def fuzz(db, rounds, first_seed) -> bool:
     """Run random days until one breaks an invariant. Returns True if all held."""
     print(f"Fuzzing {rounds} random day(s) from seed {first_seed}\n")
@@ -589,6 +606,19 @@ def fuzz(db, rounds, first_seed) -> bool:
         materialize_day(db, branch.id, day)
 
         problems = audit(db, branch, day)
+
+        if not problems:
+            sick = _busiest_staff(db, branch)
+            if sick is not None:
+                release_staff_assignments(db, sick.id, branch.id, day)
+                start, end = day_bounds_utc(day)
+                db.add(StaffLeaveModel(staff_id=sick.id, start_time=start, end_time=end))
+                db.commit()
+                materialize_day(db, branch.id, day)
+                problems = [
+                    f"[after sick call] {p}" for p in audit(db, branch, day, allow_orphans=True)
+                ]
+
         print(f"  seed {seed}: {'OK' if not problems else f'{len(problems)} PROBLEM(S)'}")
         if problems:
             print_audit(problems)

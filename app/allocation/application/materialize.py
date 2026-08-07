@@ -24,9 +24,12 @@ from app.allocation.application.roster import expected_staff
 from app.allocation.infrastructure.models import AllocationRunModel
 from app.availability.application.capacity import (
     ACTIVE_BOOKING_STATUSES,
+    _slots_covered,
+    branch_resource_caps,
     matrix_configured_for,
 )
 from app.bookings.infrastructure.models import BookingDetailModel, BookingModel, BookingStatus
+from app.branches.infrastructure.models import LocationModel
 from app.capability.application.matrix import ceil_to_grid, load_matrix, working_window
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
@@ -144,6 +147,31 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     week_minutes = _week_assigned_minutes(db, [s.id for s in staff_list], target_date)
     week_limit = {s.id: s.max_hours_week * 60 for s in staff_list}
 
+    # Chairs, tables and beds. Selling counts them on the widest possible span,
+    # so a fresh day always fits - but this run SHRINKS legs to the assigned
+    # tech's minutes, walk-ins are then sold into the space freed, and a sick
+    # call can hand a shrunk leg to a slower tech again. Without a count here
+    # that puts two customers on one chair with nobody noticing. Occupancy
+    # follows the same rule as selling: the leg's span plus its buffer.
+    branch = db.get(LocationModel, branch_id)
+    resource_caps = branch_resource_caps(branch) if branch is not None else {}
+    resource_used: dict[tuple, int] = {}
+
+    def occupy(resource, start, hold_end, delta):
+        if resource not in resource_caps:
+            return
+        for slot in _slots_covered(start, hold_end):
+            key = (resource, slot)
+            resource_used[key] = resource_used.get(key, 0) + delta
+
+    def resource_free(service, start, hold_end):
+        if service.resource not in resource_caps:
+            return True
+        return all(
+            resource_used.get((service.resource, slot), 0) < resource_caps[service.resource]
+            for slot in _slots_covered(start, hold_end)
+        )
+
     # Personal timelines and the day's turn ledger start from legs that already
     # have a technician: an earlier run of this job, or a manual reassignment.
     # Those are settled, so they live in `fixed` and the repair pass below never
@@ -154,6 +182,13 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
     turns: dict[UUID, float] = {staff.id: 0.0 for staff in staff_list}
     last_finish: dict[UUID, object] = {}
     for detail, _booking, service in rows:
+        if detail.staff_id is not None:
+            occupy(
+                service.resource,
+                detail.start_time,
+                detail.end_time + timedelta(minutes=service.buffer_after_min),
+                +1,
+            )
         if detail.staff_id in fixed:
             hold_end = detail.end_time + timedelta(minutes=service.buffer_after_min)
             fixed[detail.staff_id].append((detail.start_time, hold_end))
@@ -229,12 +264,17 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         detail.end_time = end
         detail.duration_min = real
         seated[staff_id].append((detail.id, (detail.start_time, hold_end)))
+        occupy(service.resource, detail.start_time, hold_end, +1)
         week_minutes[staff_id] = week_minutes.get(staff_id, 0) + real
         turns[staff_id] += float(service.turn_weight)
 
     def lift(detail, service):
         """Take a leg back off a tech, undoing everything place() recorded."""
         staff_id = detail.staff_id
+        for entry_id, (span_start, span_end) in seated[staff_id]:
+            if entry_id == detail.id:
+                occupy(service.resource, span_start, span_end, -1)
+                break
         seated[staff_id] = [entry for entry in seated[staff_id] if entry[0] != detail.id]
         week_minutes[staff_id] -= detail.duration_min
         turns[staff_id] -= float(service.turn_weight)
@@ -251,10 +291,11 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             {staff_id: list(legs) for staff_id, legs in seated.items()},
             dict(turns),
             dict(week_minutes),
+            dict(resource_used),
         )
 
     def restore(state):
-        legs, seats, turn_ledger, week_load = state
+        legs, seats, turn_ledger, week_load, resources = state
         for detail_id, (staff_id, end, minutes) in legs.items():
             detail = by_id[detail_id][0]
             detail.staff_id, detail.end_time, detail.duration_min = staff_id, end, minutes
@@ -262,6 +303,8 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
         turns.update(turn_ledger)
         week_minutes.clear()
         week_minutes.update(week_load)
+        resource_used.clear()
+        resource_used.update(resources)
 
     for detail, booking, service in rows:
         if detail.staff_id is not None:
@@ -278,6 +321,8 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             real, end, hold_end = fit
             if week_minutes.get(staff.id, 0) + real > week_limit[staff.id]:
                 continue  # no hours left that week
+            if not resource_free(service, detail.start_time, hold_end):
+                continue  # every chair/table/bed is taken for that span
             busy = blockers(staff.id, detail.start_time, hold_end)
             if busy is None or busy:
                 continue
@@ -338,6 +383,8 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
                 for held, start, until in reserved
             ):
                 continue
+            if not resource_free(service, detail.start_time, hold_end):
+                continue  # moving techs never frees a chair the day has not got
             busy = blockers(staff.id, detail.start_time, hold_end)
             if busy is None:
                 continue  # a lock or leave, which never gives way

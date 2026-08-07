@@ -76,7 +76,9 @@ def _booking_payload(seeded_branch, seeded_service, seeded_staff, start_time):
 def test_booking_in_the_past_is_rejected(
     client, customer_headers, seeded_branch, seeded_service, seeded_staff, seeded_shift
 ):
-    past = seeded_shift["start"] - timedelta(days=2)
+    # A week back, not two days: the shift sits two days out but hops Sundays,
+    # so on Fridays "start - 2 days" is tomorrow - a perfectly bookable date.
+    past = seeded_shift["start"] - timedelta(days=7)
     payload = _booking_payload(seeded_branch, seeded_service, seeded_staff, past)
 
     response = client.post("/app/bookings", json=payload, headers=customer_headers)
