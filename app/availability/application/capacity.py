@@ -31,12 +31,14 @@ from app.capability.application.matrix import ceil_to_grid, load_matrix, working
 from app.leaves.application.leaves import leaves_for_day
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import (
+    day_bounds_utc,
     is_closed_day,
     now_utc,
     shop_timezone,
     today_in_shop_tz,
 )
 from app.shared.infrastructure.config.settings import settings
+from app.slot_locks.application.locks import locks_overlapping
 from app.staff.infrastructure.models import StaffModel
 
 GRID_MINUTES = 15
@@ -233,6 +235,17 @@ class CapacityLedger:
         self.skills = {staff.id: set(matrix.get(staff.id, {})) for staff in staff_list}
         self.minutes = {staff.id: dict(matrix.get(staff.id, {})) for staff in staff_list}
         self.leave = leaves_for_day(db, self.staff_ids, day)
+        # Slot locks close time exactly the way leave does - a staff lock for
+        # its one technician, a branch-wide lock for everybody - and the
+        # nightly run honours them, so selling must stop counting the people
+        # they cover or it sells work the close cannot seat.
+        on_floor = set(self.staff_ids)
+        lock_start, lock_end = day_bounds_utc(day)
+        for lock in locks_overlapping(db, branch_id, lock_start, lock_end):
+            held = [lock.staff_id] if lock.staff_id is not None else self.staff_ids
+            for staff_id in held:
+                if staff_id in on_floor:
+                    self.leave.setdefault(staff_id, []).append((lock.start_time, lock.end_time))
         # Part-timers are only in for part of the day, so the lanes they fill
         # have to shrink with them - otherwise the shop sells a five o'clock
         # nobody is left to work.

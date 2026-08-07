@@ -39,6 +39,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import text
 
 from app.allocation.application.materialize import materialize_day, release_staff_assignments
+from app.allocation.application.reassign import (
+    LegNotFoundError,
+    ReassignConflictError,
+    ReassignNotAllowedError,
+    reassign_leg,
+)
 from app.allocation.application.roster import expected_staff, solve_day
 from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
@@ -51,9 +57,12 @@ from app.capability.application.matrix import ceil_to_grid, working_window
 from app.capability.infrastructure.models import StaffCapabilityModel
 from app.leaves.application.leaves import leaves_for_day
 from app.leaves.infrastructure.models import StaffLeaveModel
-from app.services.infrastructure.models import ServiceModel
+from app.schedule.application.manage import AppointmentError, add_appointment
+from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.shared.infrastructure.clock import day_bounds_utc, shop_timezone, today_in_shop_tz
 from app.shared.infrastructure.database.session import SessionLocal
+from app.slot_locks.application.locks import locks_overlapping
+from app.slot_locks.infrastructure.models import SlotLockModel
 from app.staff.infrastructure.models import StaffModel
 
 BRANCH_NAME = "Simulator Salon"
@@ -158,6 +167,7 @@ def reset(db, quiet=False) -> None:
             ids,
         )
         db.execute(text("DELETE FROM staff_leaves WHERE staff_id = ANY(CAST(:ids AS uuid[]))"), ids)
+        db.execute(text("DELETE FROM slot_locks WHERE staff_id = ANY(CAST(:ids AS uuid[]))"), ids)
         db.execute(text("DELETE FROM staff WHERE id = ANY(CAST(:ids AS uuid[]))"), ids)
     if branch_ids:
         ids = {"ids": [str(b) for b in branch_ids]}
@@ -166,6 +176,12 @@ def reset(db, quiet=False) -> None:
         )
         db.execute(text("DELETE FROM slot_locks WHERE branch_id = ANY(CAST(:ids AS uuid[]))"), ids)
     # Chain-wide services carry no branch_id, so the name is what scopes them.
+    db.execute(
+        text(
+            "DELETE FROM service_extensions WHERE service_id IN "
+            "(SELECT id FROM services WHERE name LIKE 'Simulator%')"
+        )
+    )
     db.execute(text("DELETE FROM services WHERE name LIKE 'Simulator%'"))
     db.execute(text("DELETE FROM users WHERE phone_number LIKE :p"), {"p": f"{PHONE_PREFIX}%"})
     if branch_ids:
@@ -320,7 +336,9 @@ def _sold_legs(db, branch):
     )
 
 
-def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=200_000):
+def _complete_assignment_exists(
+    rows, staff_ids, minutes, blocked, caps, extras=None, budget=200_000
+):
     """Could every sold leg have had a technician? Backtracking over the same
     rules materialize_day uses - capability, real per-tech minutes, buffers,
     leave, working hours and the weekly ceiling. Resource caps are not re-checked
@@ -331,6 +349,7 @@ def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=
     timelines = {staff_id: [] for staff_id in staff_ids}
     spent = dict.fromkeys(staff_ids, 0)
 
+    extras = extras or {}
     options = []
     for detail, service in rows:
         seats = []
@@ -338,7 +357,7 @@ def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=
             real = minutes.get((staff_id, service.id))
             if real is None:
                 continue
-            real = ceil_to_grid(real)
+            real = ceil_to_grid(real + extras.get(detail.id, 0))
             end = detail.start_time + timedelta(minutes=real)
             hold = end + timedelta(minutes=service.buffer_after_min)
             if not all(b <= detail.start_time or a >= hold for a, b in blocked.get(staff_id, [])):
@@ -388,7 +407,7 @@ def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=
         return None
 
 
-def audit(db, branch, day, allow_orphans=False):
+def audit(db, branch, day, allow_orphans=False, enforce_locks=()):
     """The invariants a finished schedule must never break.
 
     This is what makes the simulator a bug finder rather than something to
@@ -414,16 +433,52 @@ def audit(db, branch, day, allow_orphans=False):
     }
     leave = leaves_for_day(db, list(names), day)
     rows = _sold_legs(db, branch)
+    extras = {
+        detail_id: extra
+        for detail_id, extra in db.query(
+            BookingDetailModel.id, ServiceExtensionModel.extra_duration_min
+        ).join(
+            ServiceExtensionModel,
+            BookingDetailModel.service_extension_id == ServiceExtensionModel.id,
+        )
+    }
 
     # Off-duty hours block a technician exactly as leave does, so the checks
     # below treat them as one thing.
     day_start, day_end = day_bounds_utc(day)
     blocked = {staff_id: list(windows) for staff_id, windows in leave.items()}
     caps = {}
+    day_locks = locks_overlapping(db, branch.id, day_start, day_end)
     for member in staff_rows:
         work_start, work_end = working_window(member, day)
         blocked.setdefault(member.id, []).extend([(day_start, work_start), (work_end, day_end)])
         caps[member.id] = member.max_hours_week * 60
+
+    # Locks join the search's blocked map but NOT the seated-leg invariant: a
+    # lock set after the close legitimately overlaps legs seated before it -
+    # the allocator never unseats - so "no leg inside a lock" is only checkable
+    # for locks the caller vouches predate every assignment (enforce_locks).
+    blocked_for_search = {staff_id: list(w) for staff_id, w in blocked.items()}
+    for member in staff_rows:
+        for lock in day_locks:
+            if lock.staff_id is None or lock.staff_id == member.id:
+                blocked_for_search[member.id].append((lock.start_time, lock.end_time))
+
+    # Locks the caller vouches predate every assignment: no assigned leg may
+    # overlap one that binds its technician.
+    for detail, _service in rows:
+        if detail.staff_id is None:
+            continue
+        for lock in enforce_locks:
+            if lock.branch_id != branch.id:
+                continue
+            if lock.staff_id is not None and lock.staff_id != detail.staff_id:
+                continue
+            if detail.start_time < lock.end_time and detail.end_time > lock.start_time:
+                problems.append(
+                    f"{names.get(detail.staff_id, '?')} was seated inside a locked window"
+                    f" at {detail.start_time.astimezone(tz):%H:%M}"
+                )
 
     def when(moment):
         return f"{moment.astimezone(tz):%H:%M}"
@@ -497,7 +552,9 @@ def audit(db, branch, day, allow_orphans=False):
     rostered = [member.id for member in expected_staff(db, branch.id, day)]
     orphans = [detail for detail, _ in rows if detail.staff_id is None]
     if orphans and not allow_orphans:
-        verdict = _complete_assignment_exists(rows, rostered, minutes, blocked, caps)
+        verdict = _complete_assignment_exists(
+            rows, rostered, minutes, blocked_for_search, caps, extras
+        )
         if verdict is True:
             problems.append(
                 f"{len(orphans)} leg(s) left unassigned, yet a complete assignment exists"
@@ -916,6 +973,273 @@ def fuzz_chain(db, rounds, first_seed) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Full-features fuzz: the owner's own chain, every feature at once.
+#
+# Three salons with the real furniture, ten technicians with the real skill
+# split. Speeds, homes, hours, leave, locks, lengths and demand vary per seed.
+# ---------------------------------------------------------------------------
+
+FULL_RESOURCES = [
+    {"massage_beds": 2, "manicure_tables": 5, "pedicure_chairs": 3},  # A
+    {"massage_beds": 0, "manicure_tables": 4, "pedicure_chairs": 2},  # B
+    {"massage_beds": 3, "manicure_tables": 3, "pedicure_chairs": 0},  # C
+]
+
+MANI, PEDI, ART, BED = (
+    "Simulator Gel Mani",
+    "Simulator Pedicure",
+    "Simulator Nail Art",
+    "Simulator Head Massage",
+)
+
+# The owner's skill split: 3 do everything but beds, 2 do everything,
+# 2 feet only, 1 feet + beds, 1 beds only, 1 hands but no feet or beds.
+FULL_SKILLS = {
+    "An": [MANI, PEDI, ART],
+    "Binh": [MANI, PEDI, ART],
+    "Chi": [MANI, PEDI, ART],
+    "Dung": [MANI, PEDI, ART, BED],
+    "Em": [MANI, PEDI, ART, BED],
+    "Giang": [PEDI],
+    "Hoa": [PEDI],
+    "Kim": [PEDI, BED],
+    "Lan": [BED],
+    "My": [MANI, ART],
+}
+
+
+def random_full_scenario(rng):
+    technicians = {}
+    contracts = {}
+    for name, skills in FULL_SKILLS.items():
+        cells = {service: rng.choice([15, 30, 45, 60]) for service in skills}
+        technicians[name] = (cells, rng.choice([0, 1, 2, None]))
+        if rng.random() < 0.3:
+            start = rng.choice([9, 10, 12, 13])
+            contracts[name] = (start, start + rng.randint(3, 6), rng.choice([12, 16, 40]))
+        else:
+            contracts[name] = (None, None, rng.choice([24, 40, 40]))
+    leaves = [
+        (rng.choice(list(FULL_SKILLS)), (h := rng.randint(9, 15), 0), (h + rng.randint(1, 4), 0))
+        for _ in range(rng.randint(0, 2))
+    ]
+    service_names = [row[0] for row in SERVICES]
+    demand = [
+        [
+            (
+                rng.randint(9, 16),
+                rng.choice([0, 15, 30, 45]),
+                rng.sample(service_names, rng.randint(1, 2)),
+            )
+            for _ in range(rng.randint(10, 18))
+        ]
+        for _ in range(3)
+    ]
+    return technicians, contracts, leaves, demand
+
+
+def _random_lock(rng, branches, staff, day):
+    """A lock the manager might set: half branch-wide, half one technician."""
+    tz = shop_timezone()
+    hour = rng.randint(9, 15)
+    start = datetime.combine(day, time(hour, 0), tzinfo=tz).astimezone(timezone.utc)
+    end = datetime.combine(day, time(hour + rng.randint(1, 3), 0), tzinfo=tz).astimezone(
+        timezone.utc
+    )
+    branch = rng.choice(branches)
+    member = rng.choice(list(staff.values())) if rng.random() < 0.5 else None
+    return SlotLockModel(
+        branch_id=branch.id,
+        staff_id=member.id if member is not None else None,
+        start_time=start,
+        end_time=end,
+        reason="Simulator lock",
+    )
+
+
+def fuzz_full(db, rounds, first_seed) -> bool:
+    """The owner's chain under fire: locks before selling, lengths on some
+    gel sets, three salons selling at once, the nightly close, then a desk
+    walk-in, a fresh lock, a sick call, a manual reassign - and the audit
+    after every wave."""
+    print(
+        f"Fuzzing {rounds} full-feature day(s) (3 salons, 10 technicians) from seed {first_seed}\n"
+    )
+    sold_total = refused_total = walkins_total = 0
+    for offset in range(rounds):
+        seed = first_seed + offset
+        rng = random.Random(seed)
+        technicians, contracts, leaves, demand = random_full_scenario(rng)
+
+        reset(db, quiet=True)
+        day = target_day()
+        branches, services, staff = build_chain(db, technicians, FULL_RESOURCES, contracts)
+        long_set = ServiceExtensionModel(
+            service_id=services[MANI].id,
+            name="Simulator Long Full Set",
+            extra_price=10,
+            extra_duration_min=rng.choice([15, 30]),
+        )
+        db.add(long_set)
+        db.commit()
+        book_leave(db, staff, day, leaves, quiet=True)
+
+        pre_locks = [_random_lock(rng, branches, staff, day) for _ in range(rng.randint(0, 2))]
+        for lock in pre_locks:
+            db.add(lock)
+        db.commit()
+
+        tz = shop_timezone()
+        guests = 0
+        for branch, branch_demand in zip(branches, demand, strict=True):
+            customers = make_customers(db, len(branch_demand), offset=guests)
+            guests += len(branch_demand)
+            for (hour, minute, wanted), customer in zip(branch_demand, customers, strict=True):
+                start = datetime.combine(day, time(hour, minute), tzinfo=tz).astimezone(
+                    timezone.utc
+                )
+                items = []
+                for name in wanted:
+                    extension = long_set.id if name == MANI and rng.random() < 0.25 else None
+                    items.append(
+                        BookingItemRequest(
+                            service_id=services[name].id,
+                            start_time=start,
+                            service_extension_id=extension,
+                        )
+                    )
+                try:
+                    create_booking(
+                        db, customer.id, BookingCreateRequest(branch_id=branch.id, items=items)
+                    )
+                    sold_total += 1
+                except Exception:
+                    refused_total += 1
+                    db.rollback()
+
+        solve_day(db, day)
+        db.commit()
+        for branch in branches:
+            materialize_day(db, branch.id, day)
+
+        problems = []
+        for branch in branches:
+            problems += [
+                f"[{branch.name[-1]}] {p}" for p in audit(db, branch, day, enforce_locks=pre_locks)
+            ]
+        problems += _one_salon_per_day(db, branches, day)
+
+        if not problems:
+            before = {
+                detail.id: detail.staff_id
+                for branch in branches
+                for detail, _s in _sold_legs(db, branch)
+            }
+
+            # The after-close events, in the order a real evening might see
+            # them: a walk-in rings, the manager locks a window, somebody
+            # calls in sick, and a wish gets granted by hand.
+            for _ in range(rng.randint(1, 2)):
+                at = rng.choice(branches)
+                hour = rng.randint(10, 16)
+                walk_start = datetime.combine(day, time(hour, 0), tzinfo=tz).astimezone(
+                    timezone.utc
+                )
+                wanted = rng.choice([row[0] for row in SERVICES])
+                try:
+                    add_appointment(
+                        db,
+                        list(staff.values())[0].user_id,
+                        at.id,
+                        [services[wanted].id],
+                        walk_start,
+                        None,
+                        None,
+                        f"{PHONE_PREFIX}8{walkins_total % 100000:05d}",
+                        "Walk In",
+                    )
+                    walkins_total += 1
+                except AppointmentError:
+                    db.rollback()
+
+            post_lock = None
+            if rng.random() < 0.5:
+                post_lock = _random_lock(rng, branches, staff, day)
+                db.add(post_lock)
+                db.commit()
+
+            sick = None
+            for branch in branches:
+                candidate = _busiest_staff(db, branch)
+                if candidate is not None:
+                    sick = (candidate, branch)
+                    break
+            if sick is not None:
+                victim, at_branch = sick
+                release_staff_assignments(db, victim.id, at_branch.id, day)
+                start, end = day_bounds_utc(day)
+                db.add(StaffLeaveModel(staff_id=victim.id, start_time=start, end_time=end))
+                db.commit()
+
+            for branch in branches:
+                materialize_day(db, branch.id, day)
+
+            # A manager granting a wish by hand: any assigned leg, any other
+            # technician - the rules must hold whether it lands or refuses.
+            legs = [
+                (detail, branch)
+                for branch in branches
+                for detail, _s in _sold_legs(db, branch)
+                if detail.staff_id is not None
+            ]
+            if legs:
+                detail, at = rng.choice(legs)
+                target = rng.choice([m for m in staff.values() if m.id != detail.staff_id])
+                try:
+                    reassign_leg(db, detail.id, target.id, list(staff.values())[0].user_id)
+                except (LegNotFoundError, ReassignNotAllowedError, ReassignConflictError):
+                    db.rollback()
+
+            for branch in branches:
+                problems += [
+                    f"[after events {branch.name[-1]}] {p}"
+                    for p in audit(db, branch, day, allow_orphans=True, enforce_locks=pre_locks)
+                ]
+            problems += _one_salon_per_day(db, branches, day)
+
+            # Anything seated (or re-seated) AFTER the events must respect every
+            # lock in the book, the post-close one included.
+            all_locks = pre_locks + ([post_lock] if post_lock is not None else [])
+            for branch in branches:
+                for detail, _s in _sold_legs(db, branch):
+                    if detail.staff_id is None or before.get(detail.id) == detail.staff_id:
+                        continue
+                    for lock in all_locks:
+                        if lock.branch_id != branch.id:
+                            continue
+                        if lock.staff_id is not None and lock.staff_id != detail.staff_id:
+                            continue
+                        if detail.start_time < lock.end_time and detail.end_time > lock.start_time:
+                            problems.append(
+                                f"[{branch.name[-1]}] a leg re-seated after close sits inside"
+                                " a locked window"
+                            )
+
+        unsettled = [p for p in problems if "~" in p]
+        problems = [p for p in problems if p not in unsettled]
+        for note in unsettled:
+            print(f"  seed {seed}: WARN {note}")
+        print(f"  seed {seed}: {'OK' if not problems else f'{len(problems)} PROBLEM(S)'}")
+        if problems:
+            print_audit(problems)
+            print("\nReproduce with: scripts/simulate_day.py --fuzz-full 1 --seed " + str(seed))
+            return False
+    print(f"\n{rounds} full-feature day(s), no invariant broken.")
+    print(f"Across them: {sold_total} sold, {refused_total} refused, {walkins_total} walk-ins.")
+    return True
+
+
 def _flag(name, fallback):
     if name in sys.argv:
         index = sys.argv.index(name) + 1
@@ -934,6 +1258,10 @@ def main() -> None:
         if db.query(LocationModel).filter_by(name=BRANCH_NAME).first():
             print("Simulator salon already exists - clearing it first.")
             reset(db)
+
+        if "--fuzz-full" in sys.argv:
+            ok = fuzz_full(db, _flag("--fuzz-full", 25), _flag("--seed", 1))
+            sys.exit(0 if ok else 1)
 
         if "--fuzz-chain" in sys.argv:
             ok = fuzz_chain(db, _flag("--fuzz-chain", 25), _flag("--seed", 1))
