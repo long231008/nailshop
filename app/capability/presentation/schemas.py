@@ -23,6 +23,8 @@ class MatrixStaffItem(BaseModel):
     id: UUID
     # Home branch preference only - technicians belong to the chain.
     branch_id: UUID | None
+    # False pins the technician to their home branch every day.
+    floating: bool
     display_name: str
     status: str
     days_off: str
@@ -61,6 +63,11 @@ class StaffSettingsItem(BaseModel):
     work_start_hour: int | None = Field(default=None, ge=0, le=23)
     work_end_hour: int | None = Field(default=None, ge=1, le=24)
     max_hours_week: int = Field(default=40, ge=0, le=80)
+    # Placement: home branch + whether the nightly plan may move them away
+    # from it. Applied as a pair, and only when the request sends them -
+    # older callers saving hours must not silently unpin anyone.
+    branch_id: UUID | None = None
+    floating: bool = True
 
     @model_validator(mode="after")
     def hours_make_a_window(self) -> "StaffSettingsItem":
@@ -70,6 +77,12 @@ class StaffSettingsItem(BaseModel):
             and self.work_end_hour <= self.work_start_hour
         ):
             raise ValueError("work_end_hour must be after work_start_hour")
+        return self
+
+    @model_validator(mode="after")
+    def a_pin_needs_a_home(self) -> "StaffSettingsItem":
+        if not self.floating and self.branch_id is None:
+            raise ValueError("A pinned technician needs a home branch")
         return self
 
 

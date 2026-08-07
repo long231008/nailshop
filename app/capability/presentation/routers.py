@@ -47,6 +47,7 @@ def _matrix_response(db: Session) -> MatrixResponse:
             MatrixStaffItem(
                 id=t.id,
                 branch_id=t.branch_id,
+                floating=t.floating,
                 display_name=t.display_name,
                 status=t.status.value,
                 days_off=t.days_off,
@@ -115,6 +116,18 @@ def put_matrix(
         staff.work_start_hour = staff_item.work_start_hour
         staff.work_end_hour = staff_item.work_end_hour
         staff.max_hours_week = staff_item.max_hours_week
+        # Placement travels as a pair; a payload that never mentions it
+        # leaves the technician's home and pin exactly as they are.
+        if {"branch_id", "floating"} & staff_item.model_fields_set:
+            if (
+                staff_item.branch_id is not None
+                and db.get(LocationModel, staff_item.branch_id) is None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found"
+                )
+            staff.branch_id = staff_item.branch_id
+            staff.floating = staff_item.floating
 
     # 3. Replace the capability matrix (runs the on_capability_change checks).
     try:
