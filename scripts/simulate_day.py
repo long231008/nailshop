@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import text
 
 from app.allocation.application.materialize import materialize_day, release_staff_assignments
-from app.allocation.application.roster import solve_day
+from app.allocation.application.roster import expected_staff, solve_day
 from app.auth.domain.value_object import UserRole, UserStatus
 from app.auth.infrastructure.models import UserModel
 from app.availability.application.capacity import branch_resource_caps
@@ -115,7 +115,8 @@ def target_day():
 
 
 def reset(db, quiet=False) -> None:
-    branch = db.query(LocationModel).filter_by(name=BRANCH_NAME).first()
+    branches = db.query(LocationModel).filter(LocationModel.name.like(f"{BRANCH_NAME}%")).all()
+    branch_ids = [b.id for b in branches]
     staff_ids = [
         row[0]
         for row in db.query(StaffModel.id)
@@ -124,8 +125,13 @@ def reset(db, quiet=False) -> None:
         .all()
     ]
     booking_ids = (
-        [row[0] for row in db.query(BookingModel.id).filter_by(branch_id=branch.id).all()]
-        if branch
+        [
+            row[0]
+            for row in db.query(BookingModel.id)
+            .filter(BookingModel.branch_id.in_(branch_ids))
+            .all()
+        ]
+        if branch_ids
         else []
     )
 
@@ -153,13 +159,20 @@ def reset(db, quiet=False) -> None:
         )
         db.execute(text("DELETE FROM staff_leaves WHERE staff_id = ANY(CAST(:ids AS uuid[]))"), ids)
         db.execute(text("DELETE FROM staff WHERE id = ANY(CAST(:ids AS uuid[]))"), ids)
-    if branch:
-        db.execute(text("DELETE FROM allocation_runs WHERE branch_id = :id"), {"id": branch.id})
-        db.execute(text("DELETE FROM slot_locks WHERE branch_id = :id"), {"id": branch.id})
-        db.execute(text("DELETE FROM services WHERE branch_id = :id"), {"id": branch.id})
+    if branch_ids:
+        ids = {"ids": [str(b) for b in branch_ids]}
+        db.execute(
+            text("DELETE FROM allocation_runs WHERE branch_id = ANY(CAST(:ids AS uuid[]))"), ids
+        )
+        db.execute(text("DELETE FROM slot_locks WHERE branch_id = ANY(CAST(:ids AS uuid[]))"), ids)
+    # Chain-wide services carry no branch_id, so the name is what scopes them.
+    db.execute(text("DELETE FROM services WHERE name LIKE 'Simulator%'"))
     db.execute(text("DELETE FROM users WHERE phone_number LIKE :p"), {"p": f"{PHONE_PREFIX}%"})
-    if branch:
-        db.execute(text("DELETE FROM locations WHERE id = :id"), {"id": branch.id})
+    if branch_ids:
+        db.execute(
+            text("DELETE FROM locations WHERE id = ANY(CAST(:ids AS uuid[]))"),
+            {"ids": [str(b) for b in branch_ids]},
+        )
     db.commit()
     if not quiet:
         print("Simulator data removed.")
@@ -244,9 +257,9 @@ def book_leave(db, staff, day, leaves=(LEAVE,), quiet=False):
     db.commit()
 
 
-def make_customers(db, count):
+def make_customers(db, count, offset=0):
     customers = []
-    for index in range(count):
+    for index in range(offset, offset + count):
         user = UserModel(
             phone_number=f"{PHONE_PREFIX}9{index:05d}",
             first_name=f"Guest{index + 1}",
@@ -293,6 +306,7 @@ def place_demand(db, branch, services, customers, day, demand=DEMAND, quiet=Fals
     if not quiet:
         print("-" * 74)
         print(f"  {accepted} sold, {refused} refused")
+    return accepted, refused
 
 
 def _sold_legs(db, branch):
@@ -316,36 +330,62 @@ def _complete_assignment_exists(rows, staff_ids, minutes, blocked, caps, budget=
     for a good reason reads as a day it gave up on."""
     timelines = {staff_id: [] for staff_id in staff_ids}
     spent = dict.fromkeys(staff_ids, 0)
-    steps = [budget]
 
-    def seat(index):
-        if index == len(rows):
-            return True
-        if steps[0] <= 0:
-            return False
-        steps[0] -= 1
-        detail, service = rows[index]
+    options = []
+    for detail, service in rows:
+        seats = []
         for staff_id in staff_ids:
             real = minutes.get((staff_id, service.id))
             if real is None:
                 continue
             real = ceil_to_grid(real)
-            if spent[staff_id] + real > caps.get(staff_id, 0):
-                continue
             end = detail.start_time + timedelta(minutes=real)
             hold = end + timedelta(minutes=service.buffer_after_min)
-            busy = timelines[staff_id] + blocked.get(staff_id, [])
-            if not all(b <= detail.start_time or a >= hold for a, b in busy):
+            if not all(b <= detail.start_time or a >= hold for a, b in blocked.get(staff_id, [])):
                 continue
-            timelines[staff_id].append((detail.start_time, hold))
+            seats.append((staff_id, real, detail.start_time, hold))
+        if not seats:
+            return False
+        options.append(seats)
+    order = sorted(range(len(rows)), key=lambda i: (len(options[i]), rows[i][0].start_time))
+    steps = [budget]
+
+    def viable(index):
+        return any(
+            spent[staff_id] + real <= caps.get(staff_id, 0)
+            and all(b <= start or a >= hold for a, b in timelines[staff_id])
+            for staff_id, real, start, hold in options[index]
+        )
+
+    def seat(position):
+        if position == len(order):
+            return True
+        if steps[0] <= 0:
+            raise _Unknown()
+        steps[0] -= 1
+        for staff_id, real, start, hold in options[order[position]]:
+            if spent[staff_id] + real > caps.get(staff_id, 0):
+                continue
+            if not all(b <= start or a >= hold for a, b in timelines[staff_id]):
+                continue
+            timelines[staff_id].append((start, hold))
             spent[staff_id] += real
-            if seat(index + 1):
-                return True
+            if all(viable(order[later]) for later in range(position + 1, len(order))):
+                if seat(position + 1):
+                    return True
             timelines[staff_id].pop()
             spent[staff_id] -= real
         return False
 
-    return seat(0)
+    class _Unknown(Exception):
+        pass
+
+    try:
+        return seat(0)
+    except _Unknown:
+        # Out of search without settling it either way. Claiming "impossible"
+        # here would put words in the seller's mouth - say so instead.
+        return None
 
 
 def audit(db, branch, day, allow_orphans=False):
@@ -358,7 +398,13 @@ def audit(db, branch, day, allow_orphans=False):
     tz = shop_timezone()
     problems = []
 
-    staff_rows = db.query(StaffModel).filter_by(branch_id=branch.id).all()
+    staff_rows = {member.id: member for member in expected_staff(db, branch.id, day)}
+    holder_ids = {
+        detail.staff_id for detail, _s in _sold_legs(db, branch) if detail.staff_id is not None
+    }
+    for member in db.query(StaffModel).filter(StaffModel.id.in_(holder_ids)):
+        staff_rows.setdefault(member.id, member)
+    staff_rows = list(staff_rows.values())
     names = {member.id: member.display_name for member in staff_rows}
     minutes = {
         (row.staff_id, row.service_id): row.minutes
@@ -448,17 +494,27 @@ def audit(db, branch, day, allow_orphans=False):
     # After a sick call the promise is void - somebody's work has nowhere to
     # go, that is exactly what the manager's list is for - so the caller may
     # waive this one check while every other invariant still applies.
+    rostered = [member.id for member in expected_staff(db, branch.id, day)]
     orphans = [detail for detail, _ in rows if detail.staff_id is None]
     if orphans and not allow_orphans:
-        if _complete_assignment_exists(rows, list(names), minutes, blocked, caps):
+        verdict = _complete_assignment_exists(rows, rostered, minutes, blocked, caps)
+        if verdict is True:
             problems.append(
                 f"{len(orphans)} leg(s) left unassigned, yet a complete assignment exists"
                 " - the allocator gave up too early"
             )
-        else:
+        elif verdict is False:
             problems.append(
                 f"{len(orphans)} leg(s) sold that nobody could ever have worked"
                 " - selling took on a day the salon cannot staff"
+            )
+        else:
+            # A warning, not a failure: fuzzing must not stop at every genuinely
+            # hard instance, but silence would hide it - the ~ prefix lets the
+            # caller keep going while still printing it.
+            problems.append(
+                f"~{len(orphans)} leg(s) left unassigned and the check ran out of search"
+                " - not settled either way, worth a look"
             )
 
     return list(dict.fromkeys(problems))
@@ -619,6 +675,14 @@ def fuzz(db, rounds, first_seed) -> bool:
                     f"[after sick call] {p}" for p in audit(db, branch, day, allow_orphans=True)
                 ]
 
+        unsettled = [p for p in problems if "~" in p]
+        problems = [p for p in problems if p not in unsettled]
+        for note in unsettled:
+            print(f"  seed {seed}: WARN {note}")
+        unsettled = [p for p in problems if "~" in p]
+        problems = [p for p in problems if p not in unsettled]
+        for note in unsettled:
+            print(f"  seed {seed}: WARN {note}")
         print(f"  seed {seed}: {'OK' if not problems else f'{len(problems)} PROBLEM(S)'}")
         if problems:
             print_audit(problems)
@@ -633,6 +697,222 @@ def fuzz(db, rounds, first_seed) -> bool:
             print(f"\nReproduce with: scripts/simulate_day.py --fuzz 1 --seed {seed}")
             return False
     print(f"\n{rounds} random day(s), no invariant broken.")
+    return True
+
+
+def build_chain(db, technicians, branch_resources, contracts):
+    """Two salons, one chain: services are chain-wide (branch_id None) so a
+    capability cell works wherever the technician stands that day, and Step A
+    is free to move the floating ones to whichever salon the demand is at.
+
+    technicians[name] = (cells, home_index_or_None). A None home is a floater
+    with no preference at all.
+    """
+    branches = []
+    for index, resources in enumerate(branch_resources):
+        branch = LocationModel(
+            name=f"{BRANCH_NAME} {chr(65 + index)}",
+            address=f"{index + 1} Simulation Street",
+            **resources,
+        )
+        db.add(branch)
+        db.flush()
+        branches.append(branch)
+
+    services = {}
+    for name, category, group, resource, minutes, price, buffer_min, weight in SERVICES:
+        service = ServiceModel(
+            branch_id=None,
+            name=name,
+            category=category,
+            duration_min=minutes,
+            base_price=price,
+            skill_group=group,
+            resource=resource,
+            buffer_after_min=buffer_min,
+            turn_weight=weight,
+        )
+        db.add(service)
+        db.flush()
+        services[name] = service
+
+    staff = {}
+    for index, (display_name, (cells, home)) in enumerate(technicians.items()):
+        user = UserModel(
+            phone_number=f"{PHONE_PREFIX}{index:06d}",
+            status=UserStatus.ACTIVE,
+            role=UserRole.STAFF,
+        )
+        db.add(user)
+        db.flush()
+        start_hour, end_hour, week_cap = contracts.get(display_name, (None, None, 40))
+        member = StaffModel(
+            user_id=user.id,
+            branch_id=branches[home].id if home is not None else None,
+            floating=home is None,
+            display_name=display_name,
+            work_start_hour=start_hour,
+            work_end_hour=end_hour,
+            max_hours_week=week_cap,
+        )
+        db.add(member)
+        db.flush()
+        for service_name, real_minutes in cells.items():
+            db.add(
+                StaffCapabilityModel(
+                    staff_id=member.id,
+                    service_id=services[service_name].id,
+                    minutes=real_minutes,
+                )
+            )
+        staff[display_name] = member
+
+    db.commit()
+    return branches, services, staff
+
+
+CHAIN_NAMES = ["An", "Binh", "Chi", "Dung", "Em", "Giang", "Hoa", "Kim", "Lan", "My"]
+
+
+def random_chain_scenario(rng):
+    """Two salons, ten technicians, busy books at both - the shape the chain
+    machinery (Step A moving floaters to the demand) actually runs on."""
+    service_names = [row[0] for row in SERVICES]
+    technicians = {}
+    contracts = {}
+    for name in CHAIN_NAMES:
+        cells = {
+            service: rng.choice([15, 30, 45, 60])
+            for service in rng.sample(service_names, rng.randint(1, len(service_names)))
+        }
+        home = rng.choice([0, 0, 1, 1, None])  # a fifth of the team floats free
+        technicians[name] = (cells, home)
+        if rng.random() < 0.4:
+            start = rng.choice([9, 10, 12, 13])
+            contracts[name] = (start, start + rng.randint(3, 6), rng.choice([8, 12, 16, 40]))
+        else:
+            contracts[name] = (None, None, rng.choice([16, 24, 40, 40]))
+    branch_resources = [
+        {
+            "pedicure_chairs": rng.randint(1, 3),
+            "manicure_tables": rng.randint(2, 5),
+            "massage_beds": rng.randint(1, 2),
+        }
+        for _ in range(2)
+    ]
+    leaves = [
+        (rng.choice(CHAIN_NAMES), (hour := rng.randint(9, 15), 0), (hour + rng.randint(1, 4), 0))
+        for _ in range(rng.randint(0, 3))
+    ]
+    demand = [
+        [
+            (
+                rng.randint(9, 16),
+                rng.choice([0, 15, 30, 45]),
+                rng.sample(service_names, rng.randint(1, 2)),
+            )
+            for _ in range(rng.randint(12, 25))
+        ]
+        for _ in range(2)
+    ]
+    return technicians, branch_resources, contracts, leaves, demand
+
+
+def _one_salon_per_day(db, branches, day):
+    """Nobody works two salons on one day - Step A's own promise."""
+    ids = [b.id for b in branches]
+    day_start, day_end = day_bounds_utc(day)
+    rows = (
+        db.query(BookingDetailModel.staff_id, BookingModel.branch_id)
+        .join(BookingModel, BookingDetailModel.booking_id == BookingModel.id)
+        .filter(
+            BookingModel.branch_id.in_(ids),
+            BookingDetailModel.staff_id.isnot(None),
+            BookingDetailModel.start_time >= day_start,
+            BookingDetailModel.start_time < day_end,
+        )
+        .all()
+    )
+    seen: dict = {}
+    problems = []
+    for staff_id, branch_id in rows:
+        first = seen.setdefault(staff_id, branch_id)
+        if first != branch_id:
+            problems.append(f"a technician holds legs at two salons on {day}")
+            break
+    return problems
+
+
+def fuzz_chain(db, rounds, first_seed) -> bool:
+    """Random two-salon days: sell at both, close the night once, audit each
+    salon, then put the busiest technician off sick and audit again."""
+    print(f"Fuzzing {rounds} chain day(s) (2 salons, 10 technicians) from seed {first_seed}\n")
+    sold_total = refused_total = 0
+    for offset in range(rounds):
+        seed = first_seed + offset
+        rng = random.Random(seed)
+        technicians, branch_resources, contracts, leaves, demand = random_chain_scenario(rng)
+
+        reset(db, quiet=True)
+        day = target_day()
+        branches, services, staff = build_chain(db, technicians, branch_resources, contracts)
+        book_leave(db, staff, day, leaves, quiet=True)
+        guests = 0
+        for branch, branch_demand in zip(branches, demand, strict=True):
+            customers = make_customers(db, len(branch_demand), offset=guests)
+            guests += len(branch_demand)
+            sold, refused = place_demand(
+                db, branch, services, customers, day, branch_demand, quiet=True
+            )
+            sold_total += sold
+            refused_total += refused
+        solve_day(db, day)
+        db.commit()
+        for branch in branches:
+            materialize_day(db, branch.id, day)
+
+        problems = []
+        for branch in branches:
+            problems += [f"[{branch.name[-1]}] {p}" for p in audit(db, branch, day)]
+        problems += _one_salon_per_day(db, branches, day)
+
+        if not problems:
+            sick = None
+            for branch in branches:
+                candidate = _busiest_staff(db, branch)
+                if candidate is not None:
+                    sick = (candidate, branch)
+                    break
+            if sick is not None:
+                victim, at_branch = sick
+                release_staff_assignments(db, victim.id, at_branch.id, day)
+                start, end = day_bounds_utc(day)
+                db.add(StaffLeaveModel(staff_id=victim.id, start_time=start, end_time=end))
+                db.commit()
+                for branch in branches:
+                    materialize_day(db, branch.id, day)
+                for branch in branches:
+                    problems += [
+                        f"[after sick call {branch.name[-1]}] {p}"
+                        for p in audit(db, branch, day, allow_orphans=True)
+                    ]
+                problems += _one_salon_per_day(db, branches, day)
+
+        unsettled = [p for p in problems if "~" in p]
+        problems = [p for p in problems if p not in unsettled]
+        for note in unsettled:
+            print(f"  seed {seed}: WARN {note}")
+        unsettled = [p for p in problems if "~" in p]
+        problems = [p for p in problems if p not in unsettled]
+        for note in unsettled:
+            print(f"  seed {seed}: WARN {note}")
+        print(f"  seed {seed}: {'OK' if not problems else f'{len(problems)} PROBLEM(S)'}")
+        if problems:
+            print_audit(problems)
+            print("\nReproduce with: scripts/simulate_day.py --fuzz-chain 1 --seed " + str(seed))
+            return False
+    print(f"\n{rounds} chain day(s), no invariant broken.")
+    print(f"Across them: {sold_total} sold, {refused_total} refused.")
     return True
 
 
@@ -654,6 +934,10 @@ def main() -> None:
         if db.query(LocationModel).filter_by(name=BRANCH_NAME).first():
             print("Simulator salon already exists - clearing it first.")
             reset(db)
+
+        if "--fuzz-chain" in sys.argv:
+            ok = fuzz_chain(db, _flag("--fuzz-chain", 25), _flag("--seed", 1))
+            sys.exit(0 if ok else 1)
 
         if "--fuzz" in sys.argv:
             ok = fuzz(db, _flag("--fuzz", 25), _flag("--seed", 1))

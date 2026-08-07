@@ -416,6 +416,76 @@ def materialize_day(db: Session, branch_id: UUID, target_date: date_type) -> All
             # big one. Running out just means this leg waits for a human.
             reseat(detail_id, set(), [], [5000])
 
+    # Last resort: the greedy pass and the repair walk are heuristics, and on a
+    # tight day they can strand a leg a complete assignment exists for. Before
+    # any customer is left with nobody, hand the whole open day to an exact
+    # search - same rules as everything above (capability, hours, leave, week,
+    # chairs), fewest-choices-first, bounded. Fairness bends here on purpose:
+    # a lopsided turn ledger beats a customer without a technician.
+    stranded = [detail_id for detail_id in pending if by_id[detail_id][0].staff_id is None]
+    if stranded:
+        open_ids = [
+            detail_id for detail_id in pending if by_id[detail_id][0].staff_id is not None
+        ] + stranded
+        undo = snapshot()
+        for detail_id in open_ids:
+            if by_id[detail_id][0].staff_id is not None:
+                lift(*by_id[detail_id])
+
+        seats: dict = {}
+        for detail_id in open_ids:
+            detail, service = by_id[detail_id]
+            found = []
+            for staff in staff_list:
+                fit = shape(detail, service, staff.id)
+                if fit is not None:
+                    found.append((staff.id, *fit))
+            seats[detail_id] = found
+        solve_order = sorted(open_ids, key=lambda d: (len(seats[d]), by_id[d][0].start_time))
+        steps = [200_000]
+
+        def seatable(detail_id) -> bool:
+            detail, service = by_id[detail_id]
+            for staff_id, real, _end, hold_end in seats[detail_id]:
+                if week_minutes.get(staff_id, 0) + real > week_limit[staff_id]:
+                    continue
+                if not resource_free(service, detail.start_time, hold_end):
+                    continue
+                busy = blockers(staff_id, detail.start_time, hold_end)
+                if busy is None or busy:
+                    continue
+                return True
+            return False
+
+        def exact(position: int) -> bool:
+            if position == len(solve_order):
+                return True
+            if steps[0] <= 0:
+                return False
+            steps[0] -= 1
+            detail_id = solve_order[position]
+            detail, service = by_id[detail_id]
+            for staff_id, real, end, hold_end in seats[detail_id]:
+                if week_minutes.get(staff_id, 0) + real > week_limit[staff_id]:
+                    continue
+                if not resource_free(service, detail.start_time, hold_end):
+                    continue
+                busy = blockers(staff_id, detail.start_time, hold_end)
+                if busy is None or busy:
+                    continue
+                place(detail, service, staff_id, real, end, hold_end)
+                # Look ahead: a later leg stranded with no seat means nothing
+                # below this choice can work - fail it now, not after trying
+                # every arrangement of the interchangeable technicians.
+                if all(seatable(other) for other in solve_order[position + 1 :]):
+                    if exact(position + 1):
+                        return True
+                lift(detail, service)
+            return False
+
+        if not exact(0):
+            restore(undo)  # no complete seating exists - keep the partial one
+
     assigned = sum(1 for detail_id in pending if by_id[detail_id][0].staff_id is not None)
     unassigned = len(pending) - assigned
 

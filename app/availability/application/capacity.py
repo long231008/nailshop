@@ -366,7 +366,7 @@ class CapacityLedger:
 
         return _shareable(open_legs, [s for s in pool if s in free_pool], can_serve)
 
-    def can_be_staffed(self, legs: list[dict]) -> bool:
+    def can_be_staffed(self, legs: list[dict], budget: int | None = None) -> bool:
         """The exact question, for the moment a booking is actually taken.
 
         fits() asks it one 15-minute slot at a time, which is cheap enough to
@@ -393,21 +393,50 @@ class CapacityLedger:
             if named is None:
                 open_legs.append(leg)
             elif named in busy:
+                # Their minutes are already inside week_used - these legs sit in
+                # the database with a technician and this week's booking_date -
+                # so only the timeline is taken here, not the hours again.
                 busy[named].append((leg["start"], leg["end"]))
-                spent[named] = spent.get(named, 0) + _work_minutes(leg)
+
+        # Each leg's statically-possible seats: capability, hours and leave do
+        # not change during the search, so work them out once. A leg with no
+        # seat at all settles the question immediately.
+        options: list[list[tuple]] = []
+        for leg in open_legs:
+            seats = []
+            buffer_min = leg.get("buffer_min")
+            for staff_id in self.staff_ids:
+                need = self._tech_minutes(staff_id, leg)
+                if need is None:
+                    continue
+                if buffer_min is None:
+                    hold_start, hold_end = leg["start"], leg["end"]
+                    need = _work_minutes(leg)  # no per-tech data: planned span
+                else:
+                    hold_start = leg["start"]
+                    hold_end = leg["start"] + timedelta(minutes=need + buffer_min)
+                if not self._free_between(staff_id, hold_start, hold_end):
+                    continue
+                seats.append((staff_id, need, hold_start, hold_end))
+            if not seats:
+                return False
+            options.append(seats)
 
         # Fewest choices first: the leg only one technician can take decides
         # whether the day works, so try it before the ones anyone could hold.
-        choices: dict[int, list[UUID]] = {}
-        for index, leg in enumerate(open_legs):
-            choices[index] = [
-                staff_id for staff_id in self.staff_ids if self._can_do(staff_id, leg)
-            ]
         order = sorted(
-            range(len(open_legs)), key=lambda i: (len(choices[i]), open_legs[i]["start"])
+            range(len(open_legs)), key=lambda i: (len(options[i]), open_legs[i]["start"])
         )
 
-        steps = [SOLVE_BUDGET]
+        def viable(index: int) -> bool:
+            """Does this leg still have at least one open seat right now?"""
+            return any(
+                spent.get(staff_id, 0) + need <= self.week_cap[staff_id]
+                and not any(a < hold_end and b > hold_start for a, b in busy[staff_id])
+                for staff_id, need, hold_start, hold_end in options[index]
+            )
+
+        steps = [budget if budget is not None else SOLVE_BUDGET]
 
         class _Exhausted(Exception):
             pass
@@ -418,29 +447,20 @@ class CapacityLedger:
             if steps[0] <= 0:
                 raise _Exhausted()
             steps[0] -= 1
-            leg = open_legs[order[position]]
-            buffer_min = leg.get("buffer_min")
-            for staff_id in choices[order[position]]:
-                need = self._tech_minutes(staff_id, leg)
-                if need is None:
-                    continue
-                if buffer_min is None:
-                    # No per-tech data on this leg: hold the planned span.
-                    hold_start, hold_end = leg["start"], leg["end"]
-                    need = _work_minutes(leg)
-                else:
-                    hold_start = leg["start"]
-                    hold_end = leg["start"] + timedelta(minutes=need + buffer_min)
-                if not self._free_between(staff_id, hold_start, hold_end):
-                    continue
+            for staff_id, need, hold_start, hold_end in options[order[position]]:
                 if spent.get(staff_id, 0) + need > self.week_cap[staff_id]:
                     continue
                 if any(a < hold_end and b > hold_start for a, b in busy[staff_id]):
                     continue
                 busy[staff_id].append((hold_start, hold_end))
                 spent[staff_id] = spent.get(staff_id, 0) + need
-                if seat(position + 1):
-                    return True
+                # Look ahead: if this seating strands ANY later leg with no
+                # seat left, nothing below can work - fail here instead of
+                # thrashing through every arrangement of the interchangeable
+                # technicians. Proving "impossible" is what this makes cheap.
+                if all(viable(order[later]) for later in range(position + 1, len(order))):
+                    if seat(position + 1):
+                        return True
                 busy[staff_id].pop()
                 spent[staff_id] -= need
             return False

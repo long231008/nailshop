@@ -252,15 +252,57 @@ def solve_day(db: Session, day: date_type) -> list[StaffDayAssignmentModel]:
             str(branch.id),
         )
 
+    # The round-robin spread selling counted these floaters at: homeless techs
+    # go to branches in creation order, exactly as expected_staff hands them
+    # out while no day assignments exist yet.
+    baseline: dict[UUID, UUID] = {}
+    homeless = [staff for staff in unplaced if staff.branch_id is None]
+    for index, staff in enumerate(homeless):
+        baseline[staff.id] = branches[index % len(branches)].id
+
+    moved: list[tuple[StaffModel, StaffDayAssignmentModel]] = []
     for staff in unplaced:
         groups = groups_of(staff.id)
         best = min(branches, key=lambda branch: score(branch, groups, staff))
         place(staff, best.id)
-        db.add(
-            StaffDayAssignmentModel(
-                staff_id=staff.id, branch_id=best.id, day=day, source=AssignmentSource.AUTO
-            )
+        row = StaffDayAssignmentModel(
+            staff_id=staff.id, branch_id=best.id, day=day, source=AssignmentSource.AUTO
         )
+        db.add(row)
+        home = baseline.get(staff.id, staff.branch_id)
+        if home is not None and home != best.id:
+            moved.append((staff, row))
 
     db.flush()
+
+    # Minutes per skill group cannot see intervals: the greedy pass above can
+    # pull a floater away from a branch whose SOLD book needed them - selling
+    # proved each branch-day staffable with the floaters where the baseline put
+    # them, not where demand totals look biggest. So verify every branch can
+    # still staff what it sold, and hand moved floaters back to the branch that
+    # counted them until it can. The baseline placement itself always can.
+    from app.availability.application.capacity import CapacityLedger
+
+    def staffable(branch_id: UUID) -> bool:
+        # Nightly and once per branch, so it can afford a far deeper search
+        # than the per-booking check - this is the last look before the
+        # schedule becomes people's tomorrow.
+        return CapacityLedger(db, branch_id, day).can_be_staffed([], budget=200_000)
+
+    broken = [branch.id for branch in branches if not staffable(branch.id)]
+    while broken and moved:
+        target = broken[0]
+        returned = False
+        for index, (staff, row) in enumerate(moved):
+            home = baseline.get(staff.id, staff.branch_id)
+            if home == target:
+                row.branch_id = home
+                db.flush()
+                moved.pop(index)
+                returned = True
+                break
+        if not returned:
+            break  # nobody owed to this branch - materialize will surface it
+        broken = [branch.id for branch in branches if not staffable(branch.id)]
+
     return db.query(StaffDayAssignmentModel).filter(StaffDayAssignmentModel.day == day).all()
