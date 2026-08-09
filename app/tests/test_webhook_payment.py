@@ -10,6 +10,17 @@ def _sign(body: bytes) -> str:
     return hmac.new(settings.PAYMENT_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
 
 
+def _wind_back_to_pending(db_session, booking_id):
+    """Undo the automatic approval so the not-yet-approved guard can be hit."""
+    from app.bookings.infrastructure.models import BookingModel, BookingStatus
+
+    booking = db_session.get(BookingModel, uuid.UUID(booking_id))
+    booking.status = BookingStatus.PENDING
+    booking.deposit_amount = None
+    booking.approved_at = None
+    db_session.commit()
+
+
 def _create_booking(
     client,
     customer_headers,
@@ -174,7 +185,8 @@ def test_webhook_rejects_deposit_before_approval(
     cleanup_records,
     db_session,
 ):
-    # No approve step: the booking has no deposit_amount, so nothing is due yet.
+    # The API approves at creation now, so wind the booking back to PENDING -
+    # the state this guard protects (legacy rows, manual interventions).
     payload = {
         "branch_id": str(seeded_branch),
         "items": [
@@ -188,6 +200,7 @@ def test_webhook_rejects_deposit_before_approval(
     booking = client.post("/app/bookings", json=payload, headers=customer_headers).json()
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+    _wind_back_to_pending(db_session, booking["id"])
 
     transaction_id = str(uuid.uuid4())
     body = json.dumps(
@@ -314,6 +327,7 @@ def test_failed_transaction_retry_heals_after_approval(
     booking = client.post("/app/bookings", json=payload, headers=customer_headers).json()
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+    _wind_back_to_pending(db_session, booking["id"])
 
     transaction_id = str(uuid.uuid4())
     event = {

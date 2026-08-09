@@ -27,14 +27,29 @@ def _confirmed_booking(
     ).json()
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
-    client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
+    # Creation approves on the spot now - nothing further to do.
     return booking
+
+
+def _wind_back_to_pending(db_session, booking_id):
+    """Undo the automatic approval: legacy pending rows still exist and the
+    schedule endpoints must keep treating them as not-yet-confirmed."""
+    import uuid
+
+    from app.bookings.infrastructure.models import BookingModel, BookingStatus
+
+    booking = db_session.get(BookingModel, uuid.UUID(booking_id))
+    booking.status = BookingStatus.PENDING
+    booking.deposit_amount = None
+    booking.approved_at = None
+    db_session.commit()
 
 
 def test_schedule_shows_confirmed_and_hides_pending(
     client,
     admin_headers,
     customer_headers,
+    db_session,
     seeded_branch,
     seeded_service,
     seeded_staff,
@@ -68,6 +83,7 @@ def test_schedule_shows_confirmed_and_hides_pending(
     ).json()
     cleanup_records.append(("bookings", pending["id"]))
     cleanup_records.append(("booking_details", pending["details"][0]["id"]))
+    _wind_back_to_pending(db_session, pending["id"])
 
     response = client.get(
         "/app/schedule",
@@ -174,12 +190,15 @@ def test_staff_can_approve_bookings(
     client,
     staff_headers,
     customer_headers,
+    db_session,
     seeded_branch,
     seeded_service,
     seeded_staff,
     seeded_shift,
     cleanup_records,
 ):
+    """The manual approve endpoint stays for legacy pending rows, and plain
+    staff (not only admins) may use it."""
     booking = client.post(
         "/app/bookings",
         json={
@@ -196,6 +215,7 @@ def test_staff_can_approve_bookings(
     ).json()
     cleanup_records.append(("bookings", booking["id"]))
     cleanup_records.append(("booking_details", booking["details"][0]["id"]))
+    _wind_back_to_pending(db_session, booking["id"])
 
     response = client.post(f"/app/bookings/{booking['id']}/approve", headers=staff_headers)
 
@@ -248,6 +268,7 @@ def test_upcoming_pending_spans_all_dates(
     client,
     admin_headers,
     customer_headers,
+    db_session,
     seeded_branch,
     seeded_service,
     seeded_staff,
@@ -294,6 +315,8 @@ def test_upcoming_pending_spans_all_dates(
     cleanup_records.append(("bookings", far["id"]))
     cleanup_records.append(("booking_details", far["details"][0]["id"]))
 
+    # Both are auto-approved at creation, so both sit awaiting their deposit -
+    # and the listing must show them across ALL upcoming dates, not one day.
     listing = client.get(
         "/app/schedule/pending",
         params={"branch_id": str(seeded_branch)},
@@ -301,17 +324,18 @@ def test_upcoming_pending_spans_all_dates(
     )
     assert listing.status_code == 200
     stages = {p["booking_id"]: p["stage"] for p in listing.json()}
-    assert stages[near["id"]] == "awaiting_approval"
-    assert stages[far["id"]] == "awaiting_approval"
+    assert stages[near["id"]] == "awaiting_deposit"
+    assert stages[far["id"]] == "awaiting_deposit"
 
-    # Granting the far one moves it to awaiting_deposit but keeps it visible.
-    client.post(f"/app/bookings/{far['id']}/approve", headers=admin_headers)
+    # A legacy pending row stays visible too, under its own stage.
+    _wind_back_to_pending(db_session, near["id"])
     listing = client.get(
         "/app/schedule/pending",
         params={"branch_id": str(seeded_branch)},
         headers=admin_headers,
     ).json()
     stages = {p["booking_id"]: p["stage"] for p in listing}
+    assert stages[near["id"]] == "awaiting_approval"
     assert stages[far["id"]] == "awaiting_deposit"
 
 

@@ -84,7 +84,9 @@ def _to_booking_response(
 def create_booking_endpoint(
     payload: BookingCreateRequest,
     db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
     current_user: CurrentUser = Depends(require_roles(UserRole.CUSTOMER)),
+    notification_sender: NotificationSender = Depends(get_notification_sender),
 ) -> BookingResponse:
     try:
         booking, gift_message = create_booking(db, current_user.id, payload)
@@ -101,7 +103,16 @@ def create_booking_endpoint(
             detail="Total booked duration for this day cannot exceed 2 hours",
         )
 
-    return _to_booking_response(db, booking, gift_message)
+    # Every sellable time was already machine-checked, and custom designs were
+    # quoted by a human before they became bookable - nothing is left for an
+    # approval queue. Approve on the spot and send the deposit request now.
+    booking, deposit_link = approve_booking(
+        db, redis_client, booking.id, current_user.id, notification_sender
+    )
+
+    response = _to_booking_response(db, booking, gift_message)
+    response.deposit_link = deposit_link
+    return response
 
 
 @router.get("", response_model=list[BookingListItem])

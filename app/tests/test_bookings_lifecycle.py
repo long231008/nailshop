@@ -49,17 +49,18 @@ def test_approve_booking_creates_soft_lock_and_deposit(
         cleanup_records,
     )
 
-    response = client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "approved"
-    assert body["deposit_amount"] == 6.0
-    assert body["soft_lock_expires_in_seconds"] == 900
+    # Approval happens at creation now, so the lock and deposit already exist.
+    assert booking["status"] == "approved"
+    assert booking["deposit_amount"] == 6.0
+    assert booking["deposit_link"]
 
     lock_key = f"booking:soft_lock:{booking['id']}"
     assert fake_redis.get(lock_key) == "awaiting_deposit"
     assert 0 < fake_redis.ttl(lock_key) <= 900
+
+    # The manual approve endpoint has nothing left to do on such a booking.
+    response = client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers)
+    assert response.status_code == 400
 
 
 def test_cannot_approve_twice(
@@ -362,13 +363,11 @@ def test_cancel_after_paid_deposit_flags_refund_in_audit(
         seeded_shift,
         cleanup_records,
     )
-    approve = client.post(f"/app/bookings/{booking['id']}/approve", headers=admin_headers).json()
-
     body = json.dumps(
         {
             "transaction_id": str(uuid_lib.uuid4()),
             "booking_id": booking["id"],
-            "amount": approve["deposit_amount"],
+            "amount": booking["deposit_amount"],
             "transaction_type": "deposit",
         }
     ).encode()
@@ -405,7 +404,7 @@ def test_cancel_after_paid_deposit_flags_refund_in_audit(
     cleanup_records.append(("audit_logs", log_entry.id))
     # No automatic refund exists: the audit entry tells the salon money is owed.
     assert log_entry.details["deposit_paid"] is True
-    assert log_entry.details["deposit_amount"] == approve["deposit_amount"]
+    assert log_entry.details["deposit_amount"] == booking["deposit_amount"]
 
 
 def test_salon_cancel_ignores_ownership_and_notice_window(

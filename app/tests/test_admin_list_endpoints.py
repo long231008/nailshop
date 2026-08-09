@@ -77,7 +77,7 @@ def test_list_bookings_filters(
     response = client.get(
         "/app/bookings",
         params={
-            "status": "pending",
+            "status": "approved",
             "branch_id": str(seeded_branch),
             "customer_id": str(customer_identity["id"]),
         },

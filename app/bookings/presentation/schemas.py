@@ -42,6 +42,9 @@ class BookingResponse(BaseModel):
     total_price: float | None
     final_price: float | None
     deposit_amount: float | None
+    # Set on freshly created bookings: they are approved on the spot, so the
+    # customer can pay the deposit without waiting for a message.
+    deposit_link: str | None = None
     details: list[BookingDetailResponse] = []
     gift_message: str | None = None
 

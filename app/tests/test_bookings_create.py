@@ -29,8 +29,12 @@ def test_create_booking_happy_path(
 
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "pending"
+    # Sellable times are machine-checked, so the booking is approved on the
+    # spot and the deposit request rides back in the response.
+    assert body["status"] == "approved"
     assert body["total_price"] == 20.0
+    assert body["deposit_amount"] == 6.0
+    assert body["deposit_link"]
     assert len(body["details"]) == 1
 
     cleanup_records.append(("bookings", body["id"]))
