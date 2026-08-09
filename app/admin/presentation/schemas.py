@@ -65,6 +65,11 @@ class UserUpdateRequest(BaseModel):
         return self
 
 
+class UserPhoneUpdateRequest(BaseModel):
+    # Same shape registration accepts, so a corrected number can log in.
+    phone_number: str = Field(pattern=r"^\+?[0-9]{6,15}$", examples=["07412856241"])
+
+
 class UserAdminResponse(BaseModel):
     id: UUID
     phone_number: str | None

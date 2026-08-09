@@ -29,6 +29,7 @@ from app.admin.presentation.schemas import (
     UserBookingItem,
     UserDeleteResponse,
     UserListItem,
+    UserPhoneUpdateRequest,
     UserUpdateRequest,
 )
 from app.audit_log.infrastructure.models import AuditLogModel
@@ -461,6 +462,53 @@ def update_user_endpoint(
                 details=changes,
             )
         )
+    db.commit()
+    db.refresh(user)
+
+    return UserAdminResponse(
+        id=user.id,
+        phone_number=user.phone_number,
+        email=user.email,
+        role=user.role.value,
+        status=user.status.value,
+    )
+
+
+@router.patch("/users/{user_id}/phone", response_model=UserAdminResponse)
+def update_user_phone_endpoint(
+    user_id: UUID,
+    payload: UserPhoneUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+) -> UserAdminResponse:
+    """Correct an account's phone number - the number IS the login, so this
+    is how a staff member registered under a wrong number gets fixed."""
+    user = db.get(UserModel, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    taken = (
+        db.query(UserModel.id)
+        .filter(UserModel.phone_number == payload.phone_number, UserModel.id != user.id)
+        .first()
+    )
+    if taken is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That phone number already belongs to another account",
+        )
+
+    previous = user.phone_number
+    user.phone_number = payload.phone_number
+    db.add(
+        AuditLogModel(
+            actor_user_id=current_user.id,
+            action="user.phone_changed",
+            entity_type="user",
+            entity_id=user.id,
+            details={"from": previous, "to": payload.phone_number},
+        )
+    )
     db.commit()
     db.refresh(user)
 

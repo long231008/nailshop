@@ -109,6 +109,52 @@ def test_revoke_staff_on_plain_customer_returns_404(client, admin_headers, custo
     assert response.status_code == 404
 
 
+def test_admin_can_correct_an_accounts_phone_number(
+    client, admin_headers, customer_identity, db_session
+):
+    """The number is the login: fixing a staff member registered under a wrong
+    number happens here, and the change is audited."""
+    response = client.patch(
+        f"/app/admin/users/{customer_identity['id']}/phone",
+        json={"phone_number": "07999111222"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["phone_number"] == "07999111222"
+
+    user = db_session.get(UserModel, customer_identity["id"])
+    db_session.refresh(user)
+    assert user.phone_number == "07999111222"
+
+
+def test_a_phone_number_cannot_move_onto_another_account(
+    client, admin_headers, customer_identity, other_customer_headers, db_session
+):
+    from app.auth.infrastructure.models import UserModel as UM
+
+    other = (
+        db_session.query(UM)
+        .filter(UM.id != customer_identity["id"], UM.phone_number.isnot(None))
+        .order_by(UM.created_at.desc())
+        .first()
+    )
+    response = client.patch(
+        f"/app/admin/users/{customer_identity['id']}/phone",
+        json={"phone_number": other.phone_number},
+        headers=admin_headers,
+    )
+    assert response.status_code == 409, response.text
+
+
+def test_a_malformed_phone_number_is_refused(client, admin_headers, customer_identity):
+    response = client.patch(
+        f"/app/admin/users/{customer_identity['id']}/phone",
+        json={"phone_number": "not-a-number"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 422, response.text
+
+
 def test_revoke_staff_cleans_up_an_orphaned_staff_role(
     client, admin_headers, customer_identity, db_session
 ):
