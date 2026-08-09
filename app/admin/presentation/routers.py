@@ -362,20 +362,24 @@ def revoke_staff_endpoint(
         )
 
     staff = db.query(StaffModel).filter(StaffModel.user_id == user.id).first()
-    if staff is None:
+    # A staff ROLE with no staff profile is an orphan (hand-edited or
+    # half-deleted data) - revoking is how the admin cleans it up, so only a
+    # plain customer has nothing here to revoke.
+    if staff is None and user.role != UserRole.STAFF:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="This user is not a staff member"
         )
 
-    # block_staff clears future rosters and unassigns their upcoming bookings.
-    block_staff(db, staff.id, current_user.id)
+    if staff is not None:
+        # block_staff clears future rosters and unassigns their upcoming bookings.
+        block_staff(db, staff.id, current_user.id)
     user.role = UserRole.CUSTOMER
     db.add(
         AuditLogModel(
             actor_user_id=current_user.id,
             action="staff.revoked",
             entity_type="staff",
-            entity_id=staff.id,
+            entity_id=staff.id if staff is not None else user.id,
             details={"user_id": str(user.id)},
         )
     )

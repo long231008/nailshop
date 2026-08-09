@@ -109,6 +109,24 @@ def test_revoke_staff_on_plain_customer_returns_404(client, admin_headers, custo
     assert response.status_code == 404
 
 
+def test_revoke_staff_cleans_up_an_orphaned_staff_role(
+    client, admin_headers, customer_identity, db_session
+):
+    """A user whose role says staff but whose staff profile is gone (hand-edited
+    or half-deleted data) is exactly what the revoke button must clean up - it
+    demotes the role instead of refusing with 404."""
+    user = db_session.get(UserModel, customer_identity["id"])
+    user.role = UserRole.STAFF
+    db_session.commit()
+
+    response = client.post(
+        f"/app/admin/users/{customer_identity['id']}/revoke-staff",
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["role"] == "customer"
+
+
 def test_names_flow_from_registration_to_admin_list(
     client, fake_redis, admin_headers, unique_phone, cleanup_identifiers
 ):
