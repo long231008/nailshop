@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.auth.domain.value_object import UserRole
 from app.bookings.infrastructure.models import BookingDetailModel
 from app.branches.infrastructure.models import LocationModel
+from app.discounts.infrastructure.models import DiscountModel
 from app.services.application.lengths import ServiceNotFoundError, add_service_length
 from app.services.infrastructure.models import ServiceExtensionModel, ServiceModel
 from app.services.presentation.schemas import (
@@ -186,4 +187,48 @@ def delete_service_length(
         )
 
     db.delete(extension)
+    db.commit()
+
+
+@router.delete("/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_service(
+    service_id: UUID,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> None:
+    """Take a service off the menu entirely - the cure for duplicated rows.
+
+    Refused once any booking references it: past visits read their price and
+    time from the service row, so deleting it would orphan history. Capability
+    cells cascade away; length options go with the service."""
+    service = db.get(ServiceModel, service_id)
+    if service is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found")
+
+    booked = (
+        db.query(BookingDetailModel.id)
+        .filter(BookingDetailModel.service_id == service_id)
+        .first()
+        is not None
+    )
+    if booked:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Bookings have been made with this service, so it cannot be removed",
+        )
+
+    discounted = (
+        db.query(DiscountModel.id).filter(DiscountModel.service_id == service_id).first()
+        is not None
+    )
+    if discounted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A discount points at this service - remove the discount first",
+        )
+
+    db.query(ServiceExtensionModel).filter(ServiceExtensionModel.service_id == service_id).delete(
+        synchronize_session=False
+    )
+    db.delete(service)
     db.commit()
