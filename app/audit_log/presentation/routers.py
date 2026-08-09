@@ -16,6 +16,9 @@ router = APIRouter(prefix="/audit-log", tags=["audit-log"])
 def list_audit_log(
     from_: datetime | None = Query(default=None, alias="from"),
     to: datetime | None = Query(default=None),
+    # Prefix filter: "booking." narrows to the booking lifecycle, "user." to
+    # account changes, and a full action name matches exactly.
+    action: str | None = Query(default=None, max_length=50),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -26,6 +29,8 @@ def list_audit_log(
         query = query.filter(AuditLogModel.created_at >= from_)
     if to is not None:
         query = query.filter(AuditLogModel.created_at <= to)
+    if action:
+        query = query.filter(AuditLogModel.action.like(action + "%"))
 
     entries = query.order_by(AuditLogModel.created_at.desc()).limit(limit).offset(offset).all()
     return [

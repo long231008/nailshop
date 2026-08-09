@@ -57,3 +57,28 @@ def test_audit_log_filtering_by_date(client, admin_headers, db_session, cleanup_
     assert resp_future.status_code == status.HTTP_200_OK
     data_future = resp_future.json()
     assert not any(entry["id"] == str(log_entry.id) for entry in data_future)
+
+
+def test_audit_log_filters_by_action_prefix(client, admin_headers, db_session, cleanup_records):
+    """The dashboard's area dropdown sends a prefix: "booking." must return
+    booking entries and hide staffing ones."""
+    entries = []
+    for action in ("booking.approved", "staff.granted"):
+        entry = AuditLogModel(
+            actor_user_id=None,
+            action=action,
+            entity_type="test",
+            entity_id=uuid.uuid4(),
+            details={},
+        )
+        db_session.add(entry)
+        entries.append(entry)
+    db_session.commit()
+    for entry in entries:
+        cleanup_records.append(("audit_logs", entry.id))
+
+    resp = client.get("/app/audit-log", params={"action": "booking."}, headers=admin_headers)
+    assert resp.status_code == status.HTTP_200_OK
+    ids = {row["id"] for row in resp.json()}
+    assert str(entries[0].id) in ids
+    assert str(entries[1].id) not in ids
