@@ -52,14 +52,22 @@ def _ids(db, sql, **params):
     return [str(row[0]) for row in db.execute(text(sql), params)]
 
 
-def purge(db, apply: bool = False) -> list[str]:
+def purge(db, apply: bool = False, keep: set[str] | None = None) -> list[str]:
+    """keep: phone numbers/emails that must never be treated as test accounts
+    (for staff genuinely registered with an 09... number)."""
     report: list[str] = []
+    keep = keep or set()
 
-    users = _ids(
-        db,
-        "SELECT id FROM users WHERE phone_number ~ '^09[0-9]{8}$' "
-        "OR email LIKE '%@example.com'",
+    user_sql = (
+        "SELECT id FROM users WHERE (phone_number ~ '^09[0-9]{8}$' "
+        "OR email LIKE '%@example.com')"
     )
+    if keep:
+        user_sql += (
+            " AND COALESCE(phone_number, '') != ALL(:keep)"
+            " AND COALESCE(email, '') != ALL(:keep)"
+        )
+    users = _ids(db, user_sql, **({"keep": sorted(keep)} if keep else {}))
     samples = db.execute(
         text(
             "SELECT COALESCE(phone_number, email) FROM users "
@@ -68,6 +76,19 @@ def purge(db, apply: bool = False) -> list[str]:
         {"ids": users},
     ).scalars().all()
     report.append(f"test accounts: {len(users)}" + (f" (e.g. {', '.join(samples)})" if samples else ""))
+
+    # Staff are somebody's livelihood on this screen - name every one that
+    # would go, so a real technician registered with an 09... number is
+    # spotted before anything is applied (then re-run with --keep <phone>).
+    doomed_staff = db.execute(
+        text(
+            "SELECT s.display_name, COALESCE(u.phone_number, u.email) FROM staff s "
+            "JOIN users u ON u.id = s.user_id WHERE s.user_id = ANY(CAST(:u AS uuid[]))"
+        ),
+        {"u": users},
+    ).all()
+    for name, contact in doomed_staff:
+        report.append(f"  staff to delete: {name} ({contact})")
 
     branches = _ids(
         db,
@@ -222,9 +243,14 @@ def purge(db, apply: bool = False) -> list[str]:
 
 if __name__ == "__main__":
     apply_changes = "--apply" in sys.argv
+    keep_values: set[str] = set()
+    for index, arg in enumerate(sys.argv):
+        if arg == "--keep" and index + 1 < len(sys.argv):
+            keep_values.update(part.strip() for part in sys.argv[index + 1].split(",") if part.strip())
+
     session = SessionLocal()
     try:
-        lines = purge(session, apply=apply_changes)
+        lines = purge(session, apply=apply_changes, keep=keep_values)
     finally:
         session.close()
 
