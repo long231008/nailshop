@@ -25,6 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy.orm import Session  # noqa: E402
 
+# Standalone scripts must import every model module the touched tables point
+# at (users, locations, staff, designs...) - the ORM resolves all foreign keys
+# when flushing, and a namespace package registers nothing by itself.
+import app.audit_log.infrastructure.models  # noqa: F401,E402
+import app.auth.infrastructure.models  # noqa: F401,E402
+import app.branches.infrastructure.models  # noqa: F401,E402
+import app.custom_designs.infrastructure.models  # noqa: F401,E402
+import app.staff.infrastructure.models  # noqa: F401,E402
 from app.bookings.infrastructure.models import BookingDetailModel  # noqa: E402
 from app.capability.infrastructure.models import StaffCapabilityModel  # noqa: E402
 from app.discounts.infrastructure.models import DiscountModel  # noqa: E402
