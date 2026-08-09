@@ -41,6 +41,10 @@ from app.services.infrastructure.models import ServiceModel
 from app.shared.infrastructure.database.session import get_db
 from app.shared.presentation.dependencies import CurrentUser, require_roles
 from app.staff.infrastructure.models import StaffModel, StaffStatus
+from app.webhooks.infrastructure.models import (
+    PaymentTransactionModel,
+    PaymentTransactionStatus,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -274,6 +278,20 @@ def list_user_bookings(
                 )
             )
 
+    # Money through the system (a successful deposit or card payment) is what
+    # separates keep-forever records from cash-only ones on this screen.
+    paid_ids: set[UUID] = set()
+    if booking_ids:
+        paid_ids = {
+            row[0]
+            for row in db.query(PaymentTransactionModel.booking_id)
+            .filter(
+                PaymentTransactionModel.booking_id.in_(booking_ids),
+                PaymentTransactionModel.status == PaymentTransactionStatus.SUCCESS,
+            )
+            .distinct()
+        }
+
     return [
         UserBookingItem(
             id=b.id,
@@ -282,6 +300,7 @@ def list_user_bookings(
             status=b.status.value,
             total_price=float(b.total_price) if b.total_price is not None else None,
             deposit_amount=float(b.deposit_amount) if b.deposit_amount is not None else None,
+            paid_through_system=b.id in paid_ids,
             created_at=b.created_at,
             details=details_by_booking.get(b.id, []),
         )

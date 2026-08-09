@@ -373,3 +373,64 @@ def test_demoting_staff_role_blocks_their_staff_profile(
         .all()
     ):
         cleanup_records.append(("audit_logs", entry.id))
+
+
+def test_bookings_panel_flags_money_that_went_through_the_system(
+    client,
+    admin_headers,
+    customer_headers,
+    customer_identity,
+    seeded_branch,
+    seeded_service,
+    seeded_staff,
+    seeded_shift,
+    db_session,
+    cleanup_records,
+):
+    """Red/green on the dashboard: a booking turns paid_through_system once a
+    successful deposit or card transaction exists, and not before."""
+    booked = client.post(
+        "/app/bookings",
+        json={
+            "branch_id": str(seeded_branch),
+            "items": [
+                {
+                    "service_id": str(seeded_service),
+                    "staff_id": str(seeded_staff["staff_id"]),
+                    "start_time": seeded_shift["start"].isoformat(),
+                }
+            ],
+        },
+        headers=customer_headers,
+    ).json()
+    cleanup_records.append(("bookings", booked["id"]))
+    cleanup_records.append(("booking_details", booked["details"][0]["id"]))
+
+    listing = client.get(
+        f"/app/admin/users/{customer_identity['id']}/bookings", headers=admin_headers
+    ).json()
+    row = next(b for b in listing if b["id"] == booked["id"])
+    assert row["paid_through_system"] is False
+
+    from app.webhooks.infrastructure.models import (
+        PaymentTransactionModel,
+        PaymentTransactionStatus,
+        PaymentTransactionType,
+    )
+
+    transaction = PaymentTransactionModel(
+        booking_id=uuid.UUID(booked["id"]),
+        provider_transaction_id=f"tx-{uuid.uuid4().hex[:10]}",
+        amount=6,
+        transaction_type=PaymentTransactionType.DEPOSIT,
+        status=PaymentTransactionStatus.SUCCESS,
+    )
+    db_session.add(transaction)
+    db_session.commit()
+    cleanup_records.append(("payment_transactions", transaction.id))
+
+    listing = client.get(
+        f"/app/admin/users/{customer_identity['id']}/bookings", headers=admin_headers
+    ).json()
+    row = next(b for b in listing if b["id"] == booked["id"])
+    assert row["paid_through_system"] is True

@@ -111,6 +111,9 @@ class UserBookingItem(BaseModel):
     status: str
     total_price: float | None
     deposit_amount: float | None
+    # True when any money moved through the system for this booking (deposit
+    # or card payment) - those records are the keep-forever kind.
+    paid_through_system: bool = False
     created_at: datetime
     details: list[UserBookingDetailItem]
 
