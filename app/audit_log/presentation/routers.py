@@ -1,9 +1,10 @@
 from datetime import datetime
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.audit_log.application.prune import prune_audit_log
+from app.audit_log.application.prune import PROTECTED_ACTION_PREFIXES, prune_audit_log
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.audit_log.presentation.schemas import AuditLogEntry, AuditPruneResponse
 from app.auth.domain.value_object import UserRole
@@ -61,3 +62,23 @@ def prune_audit_log_endpoint(
     deleted = prune_audit_log(db, older_than_days)
     db.commit()
     return AuditPruneResponse(deleted=deleted)
+
+
+@router.delete("/{entry_id}", status_code=204)
+def delete_audit_entry_endpoint(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> None:
+    """Delete a single audit entry, for good. Money records - payments and
+    cancellations carrying deposit facts - are refused."""
+    entry = db.get(AuditLogModel, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Audit entry not found")
+    if any(entry.action.startswith(prefix) for prefix in PROTECTED_ACTION_PREFIXES):
+        raise HTTPException(
+            status_code=409,
+            detail="Money records cannot be deleted",
+        )
+    db.delete(entry)
+    db.commit()

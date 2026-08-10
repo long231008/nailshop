@@ -81,3 +81,25 @@ def test_dashboard_prune_endpoint_is_admin_only_with_a_sane_minimum(
     assert (
         db_session.query(AuditLogModel.id).filter(AuditLogModel.id == old).first() is None
     )
+
+
+def test_a_single_entry_deletes_for_good_but_money_refuses(
+    client, admin_headers, customer_headers, db_session, cleanup_records
+):
+    plain = _entry(db_session, cleanup_records, "slot_lock.created", 1).id
+    money = _entry(db_session, cleanup_records, "payment.overpaid", 1).id
+    db_session.expunge_all()
+
+    refused = client.delete(f"/app/audit-log/{plain}", headers=customer_headers)
+    assert refused.status_code == 403
+
+    gone = client.delete(f"/app/audit-log/{plain}", headers=admin_headers)
+    assert gone.status_code == 204, gone.text
+    assert db_session.query(AuditLogModel.id).filter(AuditLogModel.id == plain).first() is None
+
+    kept = client.delete(f"/app/audit-log/{money}", headers=admin_headers)
+    assert kept.status_code == 409, "money records cannot be deleted"
+    assert db_session.query(AuditLogModel.id).filter(AuditLogModel.id == money).first() is not None
+
+    missing = client.delete(f"/app/audit-log/{uuid.uuid4()}", headers=admin_headers)
+    assert missing.status_code == 404
