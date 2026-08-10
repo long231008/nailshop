@@ -148,3 +148,56 @@ def update_branch(
 
     lengths = _lengths_by_service(db)
     return _branch_response(branch, [_summarise(s, lengths) for s in services])
+
+
+@router.delete("/{branch_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_branch(
+    branch_id: UUID,
+    db: Session = Depends(get_db),
+    _=Depends(require_roles(UserRole.ADMIN)),
+) -> None:
+    """Close a salon for good.
+
+    Refused while anything meaningful still points at it - bookings (history),
+    technicians homed there, its own services, or a discount - each with a
+    message saying what to move first. Operational leftovers that mean nothing
+    without the salon (locks, day assignments, rosters, allocation runs) are
+    swept away with it."""
+    branch = db.get(LocationModel, branch_id)
+    if branch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Branch not found")
+
+    from app.bookings.infrastructure.models import BookingModel
+    from app.discounts.infrastructure.models import DiscountModel
+    from app.staff.infrastructure.models import StaffModel
+
+    blockers = [
+        (
+            db.query(BookingModel.id).filter(BookingModel.branch_id == branch_id).first(),
+            "Bookings have been made at this branch, so it cannot be removed",
+        ),
+        (
+            db.query(StaffModel.id).filter(StaffModel.branch_id == branch_id).first(),
+            "Technicians are homed at this branch - move them to another salon first",
+        ),
+        (
+            db.query(ServiceModel.id).filter(ServiceModel.branch_id == branch_id).first(),
+            "Services belong to this branch - move them to the whole chain or delete them first",
+        ),
+        (
+            db.query(DiscountModel.id).filter(DiscountModel.branch_id == branch_id).first(),
+            "A discount points at this branch - remove the discount first",
+        ),
+    ]
+    for hit, message in blockers:
+        if hit is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
+
+    from sqlalchemy import text as sql_text
+
+    for table in ("slot_locks", "staff_day_assignments", "staff_rosters", "allocation_runs"):
+        db.execute(
+            sql_text(f"DELETE FROM {table} WHERE branch_id = :b"), {"b": str(branch_id)}
+        )
+    db.delete(branch)
+    db.commit()
