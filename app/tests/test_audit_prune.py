@@ -35,6 +35,9 @@ def test_prune_removes_old_entries_but_never_the_money(
     old_cancel = _entry(db_session, cleanup_records, "booking.cancelled_by_customer", 800).id
     recent_plain = _entry(db_session, cleanup_records, "booking.no_show", 10).id
     db_session.expunge_all()
+    markers_before = (
+        db_session.query(AuditLogModel.id).filter(AuditLogModel.action == "audit.pruned").count()
+    )
 
     deleted = prune_audit_log(db_session, older_than_days=730)
     db_session.commit()
@@ -46,16 +49,11 @@ def test_prune_removes_old_entries_but_never_the_money(
     assert recent_plain in remaining
     assert deleted >= 1
 
-    # The trim itself leaves a trace.
-    marker = (
-        db_session.query(AuditLogModel)
-        .filter(AuditLogModel.action == "audit.pruned")
-        .order_by(AuditLogModel.created_at.desc())
-        .first()
+    # The owner's choice: a trim leaves no trace of itself.
+    markers_after = (
+        db_session.query(AuditLogModel.id).filter(AuditLogModel.action == "audit.pruned").count()
     )
-    assert marker is not None
-    cleanup_records.append(("audit_logs", marker.id))
-    assert marker.details["older_than_days"] == 730
+    assert markers_after <= markers_before
 
 
 def test_dashboard_prune_endpoint_is_admin_only_with_a_sane_minimum(
@@ -80,14 +78,6 @@ def test_dashboard_prune_endpoint_is_admin_only_with_a_sane_minimum(
     assert response.status_code == 200, response.text
     assert response.json()["deleted"] >= 1
 
-    marker = (
-        db_session.query(AuditLogModel)
-        .filter(AuditLogModel.action == "audit.pruned")
-        .order_by(AuditLogModel.created_at.desc())
-        .first()
-    )
-    if marker is not None:
-        cleanup_records.append(("audit_logs", marker.id))
     assert (
         db_session.query(AuditLogModel.id).filter(AuditLogModel.id == old).first() is None
     )

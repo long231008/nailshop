@@ -8,7 +8,7 @@ from app.audit_log.infrastructure.models import AuditLogModel
 from app.audit_log.presentation.schemas import AuditLogEntry, AuditPruneResponse
 from app.auth.domain.value_object import UserRole
 from app.shared.infrastructure.database.session import get_db
-from app.shared.presentation.dependencies import CurrentUser, require_roles
+from app.shared.presentation.dependencies import require_roles
 
 router = APIRouter(prefix="/audit-log", tags=["audit-log"])
 
@@ -52,11 +52,12 @@ def list_audit_log(
 def prune_audit_log_endpoint(
     older_than_days: int = Query(ge=30, le=3650),
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(require_roles(UserRole.ADMIN)),
+    _=Depends(require_roles(UserRole.ADMIN)),
 ) -> AuditPruneResponse:
     """Delete audit entries older than the cutoff (minimum 30 days, so a typo
     cannot wipe last week). Money records - payments and cancellations that
-    carry the deposit facts - are never deleted."""
-    deleted = prune_audit_log(db, older_than_days, current_user.id)
+    carry the deposit facts - are never deleted. The deletion leaves no trace
+    of itself."""
+    deleted = prune_audit_log(db, older_than_days)
     db.commit()
     return AuditPruneResponse(deleted=deleted)
