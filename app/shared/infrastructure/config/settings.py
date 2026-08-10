@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # nightly allocation can assign technicians to a demand that no longer moves.
     BOOKING_HORIZON_DAYS: int = 14
     BOOKING_CLOSE_HOUR: int = 21
+    # Audit entries older than this are removed by a nightly job - except
+    # money records (payments, cancellations with deposit facts), which are
+    # kept forever. 0 disables the automatic clean-up entirely.
+    AUDIT_RETENTION_DAYS: int = 730
     # "console" prints OTP codes and deposit links to the log (local development only).
     # "null" records that a message was sent without ever logging its contents.
     # "live" delivers for real: SMS to phone numbers, email to addresses.

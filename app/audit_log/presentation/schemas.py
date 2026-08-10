@@ -12,3 +12,7 @@ class AuditLogEntry(BaseModel):
     entity_id: UUID | None
     details: dict | None
     created_at: datetime
+
+
+class AuditPruneResponse(BaseModel):
+    deleted: int

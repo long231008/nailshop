@@ -16,6 +16,7 @@ from app.allocation.presentation.routers import router as allocation_router
 from app.audit_log.presentation.routers import router as audit_log_router
 from app.auth.presentation.router import router as auth_router
 from app.availability.presentation.routers import router as availability_router
+from app.audit_log.application.prune import prune_audit_log
 from app.bookings.application.expire_soft_locks import expire_unpaid_soft_locks
 from app.bookings.presentation.routers import router as bookings_router
 from app.branches.presentation.router import router as branches_router
@@ -63,6 +64,21 @@ def _run_expire_soft_locks_job() -> None:
     db = SessionLocal()
     try:
         expire_unpaid_soft_locks(db, redis_client, get_notification_sender())
+    finally:
+        db.close()
+
+
+def _run_audit_prune_job() -> None:
+    # Nightly trim of the audit trail per AUDIT_RETENTION_DAYS (0 = keep all).
+    # Money records are protected inside prune_audit_log itself.
+    if settings.AUDIT_RETENTION_DAYS <= 0:
+        return
+    if not redis_client.set("jobs:audit_prune:lock", "1", nx=True, ex=3600):
+        return
+    db = SessionLocal()
+    try:
+        prune_audit_log(db, settings.AUDIT_RETENTION_DAYS)
+        db.commit()
     finally:
         db.close()
 
@@ -117,6 +133,14 @@ async def lifespan(app: FastAPI):
         minute=20,
         timezone=str(shop_timezone()),
         id="nightly_allocation_watchdog",
+    )
+    scheduler.add_job(
+        _run_audit_prune_job,
+        "cron",
+        hour=4,
+        minute=0,
+        timezone=str(shop_timezone()),
+        id="audit_prune",
     )
     scheduler.start()
     yield
