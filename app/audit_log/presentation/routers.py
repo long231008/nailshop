@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.audit_log.application.prune import PROTECTED_ACTION_PREFIXES, prune_audit_log
+from app.audit_log.application.prune import prune_audit_log
 from app.audit_log.infrastructure.models import AuditLogModel
 from app.audit_log.presentation.schemas import AuditLogEntry, AuditPruneResponse
 from app.auth.domain.value_object import UserRole
@@ -56,10 +56,10 @@ def prune_audit_log_endpoint(
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> AuditPruneResponse:
     """Delete audit entries older than the cutoff (minimum 30 days, so a typo
-    cannot wipe last week). Money records - payments and cancellations that
-    carry the deposit facts - are never deleted. The deletion leaves no trace
-    of itself."""
-    deleted = prune_audit_log(db, older_than_days)
+    cannot wipe last week). An admin pressing this deletes everything in
+    range, money records included; only the unattended nightly job keeps
+    them. The deletion leaves no trace of itself."""
+    deleted = prune_audit_log(db, older_than_days, protect_money=False)
     db.commit()
     return AuditPruneResponse(deleted=deleted)
 
@@ -70,15 +70,10 @@ def delete_audit_entry_endpoint(
     db: Session = Depends(get_db),
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> None:
-    """Delete a single audit entry, for good. Money records - payments and
-    cancellations carrying deposit facts - are refused."""
+    """Delete a single audit entry, for good - any entry, an admin's hand is
+    deliberate. Only the unattended nightly job protects money records."""
     entry = db.get(AuditLogModel, entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Audit entry not found")
-    if any(entry.action.startswith(prefix) for prefix in PROTECTED_ACTION_PREFIXES):
-        raise HTTPException(
-            status_code=409,
-            detail="Money records cannot be deleted",
-        )
     db.delete(entry)
     db.commit()

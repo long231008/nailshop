@@ -27,9 +27,10 @@ def _entry(db_session, cleanup_records, action, age_days):
     return entry
 
 
-def test_prune_removes_old_entries_but_never_the_money(
+def test_the_nightly_job_removes_old_entries_but_never_the_money(
     db_session, cleanup_records
 ):
+    """The unattended path (protect_money on, as the 4am job calls it)."""
     old_plain = _entry(db_session, cleanup_records, "booking.no_show", 800).id
     old_payment = _entry(db_session, cleanup_records, "payment.overpaid", 800).id
     old_cancel = _entry(db_session, cleanup_records, "booking.cancelled_by_customer", 800).id
@@ -56,10 +57,13 @@ def test_prune_removes_old_entries_but_never_the_money(
     assert markers_after <= markers_before
 
 
-def test_dashboard_prune_endpoint_is_admin_only_with_a_sane_minimum(
+def test_dashboard_prune_endpoint_is_admin_only_and_deletes_money_too(
     client, admin_headers, customer_headers, db_session, cleanup_records
 ):
+    """An admin pressing the button is deliberate: everything in range goes,
+    money records included - unlike the nightly job."""
     old = _entry(db_session, cleanup_records, "slot_lock.created", 400).id
+    old_money = _entry(db_session, cleanup_records, "payment.overpaid", 400).id
     db_session.expunge_all()
 
     refused = client.delete(
@@ -76,14 +80,14 @@ def test_dashboard_prune_endpoint_is_admin_only_with_a_sane_minimum(
         "/app/audit-log", params={"older_than_days": 365}, headers=admin_headers
     )
     assert response.status_code == 200, response.text
-    assert response.json()["deleted"] >= 1
+    assert response.json()["deleted"] >= 2
 
-    assert (
-        db_session.query(AuditLogModel.id).filter(AuditLogModel.id == old).first() is None
-    )
+    remaining = {row[0] for row in db_session.query(AuditLogModel.id).all()}
+    assert old not in remaining
+    assert old_money not in remaining, "the manual button deletes money records too"
 
 
-def test_a_single_entry_deletes_for_good_but_money_refuses(
+def test_a_single_entry_deletes_for_good_including_money(
     client, admin_headers, customer_headers, db_session, cleanup_records
 ):
     plain = _entry(db_session, cleanup_records, "slot_lock.created", 1).id
@@ -97,9 +101,9 @@ def test_a_single_entry_deletes_for_good_but_money_refuses(
     assert gone.status_code == 204, gone.text
     assert db_session.query(AuditLogModel.id).filter(AuditLogModel.id == plain).first() is None
 
-    kept = client.delete(f"/app/audit-log/{money}", headers=admin_headers)
-    assert kept.status_code == 409, "money records cannot be deleted"
-    assert db_session.query(AuditLogModel.id).filter(AuditLogModel.id == money).first() is not None
+    money_gone = client.delete(f"/app/audit-log/{money}", headers=admin_headers)
+    assert money_gone.status_code == 204, "the row button deletes money records too"
+    assert db_session.query(AuditLogModel.id).filter(AuditLogModel.id == money).first() is None
 
     missing = client.delete(f"/app/audit-log/{uuid.uuid4()}", headers=admin_headers)
     assert missing.status_code == 404
