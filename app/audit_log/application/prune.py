@@ -1,11 +1,12 @@
 """Trim the audit trail.
 
-Two hands trim it, with different rights - the owner's choice:
+The owner's rules, by how deliberate the hand is:
 
-- The dashboard's buttons are a human acting deliberately, so they may
-  delete anything, money records included (protect_money=False).
-- The nightly job runs unattended, so it never touches entries proving money
-  moved - payments, cancellations carrying the deposit facts.
+- The per-row delete button may remove anything, money records included -
+  one aimed click at one entry is as deliberate as it gets.
+- Bulk sweeps - the dashboard's older-than button and the unattended nightly
+  job - never touch entries proving money moved (payments, cancellations
+  carrying the deposit facts): protect_money stays on for both.
 
 Deletion is clean either way: a trim leaves no trace of itself.
 """

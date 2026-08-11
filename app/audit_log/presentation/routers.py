@@ -56,10 +56,11 @@ def prune_audit_log_endpoint(
     _=Depends(require_roles(UserRole.ADMIN)),
 ) -> AuditPruneResponse:
     """Delete audit entries older than the cutoff (minimum 30 days, so a typo
-    cannot wipe last week). An admin pressing this deletes everything in
-    range, money records included; only the unattended nightly job keeps
-    them. The deletion leaves no trace of itself."""
-    deleted = prune_audit_log(db, older_than_days, protect_money=False)
+    cannot wipe last week). Money records - payments, cancellations carrying
+    deposit facts - are kept: a bulk sweep is too blunt for them. Deleting a
+    money record takes the deliberate per-row button. The deletion leaves no
+    trace of itself."""
+    deleted = prune_audit_log(db, older_than_days)
     db.commit()
     return AuditPruneResponse(deleted=deleted)
 

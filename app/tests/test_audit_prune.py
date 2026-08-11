@@ -57,11 +57,11 @@ def test_the_nightly_job_removes_old_entries_but_never_the_money(
     assert markers_after <= markers_before
 
 
-def test_dashboard_prune_endpoint_is_admin_only_and_deletes_money_too(
+def test_dashboard_prune_endpoint_is_admin_only_and_keeps_the_money(
     client, admin_headers, customer_headers, db_session, cleanup_records
 ):
-    """An admin pressing the button is deliberate: everything in range goes,
-    money records included - unlike the nightly job."""
+    """The older-than button is a bulk sweep, so money records survive it -
+    only the aimed per-row delete may take them."""
     old = _entry(db_session, cleanup_records, "slot_lock.created", 400).id
     old_money = _entry(db_session, cleanup_records, "payment.overpaid", 400).id
     db_session.expunge_all()
@@ -80,11 +80,11 @@ def test_dashboard_prune_endpoint_is_admin_only_and_deletes_money_too(
         "/app/audit-log", params={"older_than_days": 365}, headers=admin_headers
     )
     assert response.status_code == 200, response.text
-    assert response.json()["deleted"] >= 2
+    assert response.json()["deleted"] >= 1
 
     remaining = {row[0] for row in db_session.query(AuditLogModel.id).all()}
     assert old not in remaining
-    assert old_money not in remaining, "the manual button deletes money records too"
+    assert old_money in remaining, "a bulk sweep must keep money records"
 
 
 def test_a_single_entry_deletes_for_good_including_money(
