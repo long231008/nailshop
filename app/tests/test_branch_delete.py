@@ -26,7 +26,7 @@ def test_an_empty_branch_deletes_cleanly(client, admin_headers, db_session, clea
     )
 
 
-def test_a_branch_with_homed_staff_is_refused_with_a_reason(
+def test_a_branch_with_homed_staff_is_refused_and_names_them(
     client, admin_headers, db_session, seeded_staff, cleanup_records
 ):
     branch = _branch(db_session, cleanup_records)
@@ -38,10 +38,38 @@ def test_a_branch_with_homed_staff_is_refused_with_a_reason(
 
     response = client.delete(f"/app/branches/{branch_id}", headers=admin_headers)
     assert response.status_code == 409, response.text
-    assert "Technicians" in response.json()["detail"]
+    # The admin must know WHO to move, not just that somebody exists.
+    assert "Test Staff" in response.json()["detail"]
 
     staff = db_session.get(StaffModel, seeded_staff["staff_id"])
     staff.branch_id = original_home
+    db_session.commit()
+
+
+def test_a_blocked_profile_does_not_hold_a_branch_hostage(
+    client, admin_headers, db_session, seeded_staff, cleanup_records
+):
+    """Revoked staff keep their row but vanish from the capability screen - if
+    their home still blocked deletion, the admin would face a refusal with
+    nobody visible to move. Blocked profiles are unhomed instead."""
+    from app.staff.infrastructure.models import StaffStatus
+
+    branch = _branch(db_session, cleanup_records)
+    staff = db_session.get(StaffModel, seeded_staff["staff_id"])
+    original_home, original_status = staff.branch_id, staff.status
+    staff.branch_id = branch.id
+    staff.status = StaffStatus.BLOCKED
+    db_session.commit()
+    branch_id = branch.id
+
+    response = client.delete(f"/app/branches/{branch_id}", headers=admin_headers)
+    assert response.status_code == 204, response.text
+
+    staff = db_session.get(StaffModel, seeded_staff["staff_id"])
+    db_session.refresh(staff)
+    assert staff.branch_id is None
+    staff.branch_id = original_home
+    staff.status = original_status
     db_session.commit()
 
 

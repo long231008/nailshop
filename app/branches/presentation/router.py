@@ -169,16 +169,28 @@ def delete_branch(
 
     from app.bookings.infrastructure.models import BookingModel
     from app.discounts.infrastructure.models import DiscountModel
-    from app.staff.infrastructure.models import StaffModel
+    from app.staff.infrastructure.models import StaffModel, StaffStatus
+
+    # A working technician homed here needs a human decision - name them so
+    # the admin knows who to move. A blocked (revoked) profile's home means
+    # nothing and would only leave an invisible, unfixable blocker: unhome it.
+    homed = db.query(StaffModel).filter(StaffModel.branch_id == branch_id).all()
+    active_names = [s.display_name for s in homed if s.status != StaffStatus.BLOCKED]
+    if active_names:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Technicians are homed at this branch - move them to another salon "
+                "first: " + ", ".join(sorted(active_names))
+            ),
+        )
+    for member in homed:
+        member.branch_id = None
 
     blockers = [
         (
             db.query(BookingModel.id).filter(BookingModel.branch_id == branch_id).first(),
             "Bookings have been made at this branch, so it cannot be removed",
-        ),
-        (
-            db.query(StaffModel.id).filter(StaffModel.branch_id == branch_id).first(),
-            "Technicians are homed at this branch - move them to another salon first",
         ),
         (
             db.query(ServiceModel.id).filter(ServiceModel.branch_id == branch_id).first(),
